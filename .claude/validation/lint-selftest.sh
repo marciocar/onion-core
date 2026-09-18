@@ -6799,6 +6799,69 @@ run_empty_result_guard_selftests() {
     record_pass "empty-result-guard: (b2) \`until ! pgrep -f\` → avisa que o laço espera por SI MESMO"
   else record_fail "empty-result-guard: (b2)" "não reagiu ao pgrep -f auto-casante: ${out}"; fi
 
+  # (b3) REAGE: LAÇO DE ESPERA SEM TETO — o irmão do (b2), e a prova de que é CLASSE está na
+  #      reincidência: o (b2) curou `until ! pgrep` depois de 1h06 preso, e um mês depois o mesmo
+  #      dano voltou por outra porta — 2h21 esperando checks de CI que nunca iam nascer, porque o
+  #      PR estava CONFLICTING e o GitHub não dispara `pull_request` sem conseguir computar o merge.
+  #      A condição `-ge 3` era inalcançável e nada dizia isso: silêncio é indistinguível de espera.
+  out="$(_erg '"until [ \"$(gh api repos/o/r/commits/abc/check-runs --jq length)\" -ge 3 ]; do sleep 60; done"' '""' || true)"
+  if grep -q 'LAÇO-DE-ESPERA-SEM-TETO' <<< "${out}"; then
+    record_pass "empty-result-guard: (c1) laço de espera sem prazo → avisa (2h21 medidos)"
+  else record_fail "empty-result-guard: (c1)" "não reagiu ao laço sem teto: ${out}"; fi
+
+  # (b4) CALA com teto E saída que distingue os dois casos — a cura recomendada tem de desarmar a
+  #      guarda, senão ela pune quem a obedece e vira fadiga (a lição do caso (d) desta família).
+  out="$(_erg '"fim=$((SECONDS+1800)); until [ -f /tmp/x ]; do [ $SECONDS -gt $fim ] && { echo DESISTI; break; }; sleep 60; done"' '""' || true)"
+  if ! grep -q 'LAÇO-DE-ESPERA-SEM-TETO' <<< "${out}"; then
+    record_pass "empty-result-guard: (c2) laço COM teto e saída explícita → cala (a cura desarma)"
+  else record_fail "empty-result-guard: (c2)" "puniu quem obedeceu à recomendação: ${out}"; fi
+
+  # (b5) CALA em comando que só MENCIONA a palavra — a lição que esta guarda já pagou DUAS vezes
+  #      (detector (5), e o (3b) por não reusar a cura): sem âncora em posição de comando, um
+  #      `grep -n until` e até a mensagem de commit que DESCREVE a regra seriam acusados.
+  out="$(_erg '"grep -rn \"until\" .claude/hooks/ | head -5"' '"x"' || true)"
+  if ! grep -q 'LAÇO-DE-ESPERA-SEM-TETO' <<< "${out}"; then
+    record_pass "empty-result-guard: (c3) comando que só MENCIONA 'until' → cala (âncora de posição)"
+  else record_fail "empty-result-guard: (c3)" "falso-positivo em comando de leitura: ${out}"; fi
+
+  # (b6) CALA em laço sobre lista FINITA — `while read` sem `sleep` termina sozinho; cobrá-lo seria
+  #      acusar o idioma mais comum de shell do repo (90 laços em scripts commitados).
+  out="$(_erg '"while IFS= read -r f; do echo \"$f\"; done < lista.txt"' '"x"' || true)"
+  if ! grep -q 'LAÇO-DE-ESPERA-SEM-TETO' <<< "${out}"; then
+    record_pass "empty-result-guard: (c4) laço sobre lista finita (sem sleep) → cala"
+  else record_fail "empty-result-guard: (c4)" "acusou iteração finita: ${out}"; fi
+
+  # (b7) CALA sob `timeout(1)` — teto EXTERNO conta igual. O ponto da guarda é o teto EXISTIR, nunca
+  #      a forma de escrevê-lo; regra que só aceita um dialeto vira cerimônia.
+  out="$(_erg '"timeout 300 bash -c \"until [ -f /tmp/x ]; do sleep 5; done\""' '""' || true)"
+  if ! grep -q 'LAÇO-DE-ESPERA-SEM-TETO' <<< "${out}"; then
+    record_pass "empty-result-guard: (c5) teto externo via timeout(1) → cala"
+  else record_fail "empty-result-guard: (c5)" "não reconheceu timeout(1) como teto: ${out}"; fi
+
+  # (c6) CALA quando `until`/`sleep` aparecem DENTRO DE UMA STRING — falso-positivo medido minutos
+  #      depois de a guarda nascer: `ps … | awk '/until |sleep /'` foi acusado, porque o separador
+  #      `tr ';&|'` não respeita aspas e partiu o regex num fragmento que ABRE com `until `. É a
+  #      lição (ii) deste arquivo pela terceira vez. Cura: laço de verdade tem `do`/`done`; menção não.
+  out="$(_erg '"ps -eo pid,cmd | awk \"/until |sleep |check-runs/\" | head -5"' '"x"' || true)"
+  if ! grep -q 'LAÇO-DE-ESPERA-SEM-TETO' <<< "${out}"; then
+    record_pass "empty-result-guard: (c6) 'until|sleep' dentro de string → cala (exige do/done)"
+  else record_fail "empty-result-guard: (c6)" "falso-positivo por menção em regex: ${out:0:140}"; fi
+
+  # (c7) REAGE: crase dentro de `-m "…"` — o shell EXECUTA em vez de citar. Medido nesta sessão:
+  #      `docs/` entre crases virou `Is a directory` e a palavra SUMIU da mensagem commitada. Dano
+  #      cosmético naquela vez; a classe não é — mensagem de commit é onde se NARRA `rm -rf`.
+  out="$(_erg '"git commit -m \"cura o (docs/) e segue\""' '""' || true)"
+  out="$(_erg "\"git commit -m \\\"cura o \`docs/\` e segue\\\"\"" '""' || true)"
+  if grep -q 'CRASE-EM-MENSAGEM-DE-COMMIT' <<< "${out}"; then
+    record_pass "empty-result-guard: (c7) crase em -m \"…\" → avisa que o shell EXECUTA"
+  else record_fail "empty-result-guard: (c7)" "não reagiu à crase em mensagem de commit: ${out:0:140}"; fi
+
+  # (c8) CALA no heredoc CITADO — a cura recomendada tem de desarmar a guarda, senão pune quem obedece
+  out="$(_erg '"git commit -F - <<'"'"'MSG'"'"'"' '""' || true)"
+  if ! grep -q 'CRASE-EM-MENSAGEM-DE-COMMIT' <<< "${out}"; then
+    record_pass "empty-result-guard: (c8) heredoc citado → cala (a cura desarma)"
+  else record_fail "empty-result-guard: (c8)" "puniu quem usou heredoc citado: ${out:0:140}"; fi
+
   # (b2b) COBERTURA — a 2ª versão exigia que o cluster com `f` fosse o PRIMEIRO token, e escapavam
   #       `pkill -9 -f` (a forma mais comum do mundo real), `-a -f`, `-u root -f` e a longa `--full`.
   #       Promessa maior que cobertura é `declarado != verificado` dentro da própria guarda.
@@ -17096,7 +17159,13 @@ run_regen_completude_selftests() {
   # ISENÇÕES DECLARADAS, com a razão — nunca uma lista muda. Quem isentar sem razão escrita está
   # repetindo o defeito uma camada acima.
   local _isentos=(
-    "federation-console.sh"     # projeta em docs/evolution/federation/ — superfície CORE-ONLY, não viaja
+    # ⚠️ RAZÃO CORRIGIDA no mesmo dia em que foi escrita: eu havia justificado com "projeta em
+    # docs/evolution/federation/", e é FALSO — ele também gera `docs/onion/federation-map.md` e
+    # `docs/onion/federation-console.html`, que ficam onde o `regen-ssot-projections.sh` escreve.
+    # O veredito (isento) continua certo; a razão, não. E razão errada é pior que ausente: o
+    # próximo lê a justificativa, confere o caminho, vê que não bate, e passa a duvidar da lista
+    # inteira. O motivo VERDADEIRO é o mesmo do a2a-agent-card.
+    "federation-console.sh"     # deriva de docs/evolution/federation/members.yaml — CORE-ONLY: sem registro, não há mapa nem console a gerar
     "marketplace-root-check.sh" # marketplace é CORE-ONLY (só a fonte publica plugin)
     "vendor-scrub-form-check.sh" # emite BASELINE, não projeção: baseline é LEDGER DO ALVO e o do core nunca viaja
     "kg-view.sh"                # visualizador POR-GRAFO (exige argumento), não gerador de projeção

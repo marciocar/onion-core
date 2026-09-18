@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # kg-radar.sh — radar determinístico do Knowledge Graph SDAAL (motor soberano do core).
 #
-# Uso: bash .claude/validation/kg-radar.sh <arquivo.kg.yaml> [<modo>...]  (modos COMPÕEM: `--integrity --schema` roda os dois e reprova se qualquer um reprovar)\n       modos: --radar|--state|--reconcile|--integrity|--domain|--provenance|--freshness|--freshness-tsv|--open-tsv|--weights-tsv|--status-tsv|--schema|--triples
+# Uso: bash .claude/validation/kg-radar.sh <arquivo.kg.yaml> [<modo>...]  (modos COMPÕEM: `--integrity --schema` roda os dois e reprova se qualquer um reprovar)\n       modos: --radar|--state|--reconcile|--integrity|--domain|--provenance|--freshness|--freshness-tsv|--open-tsv|--weights-tsv|--status-tsv|--schema|--triples|--validade
 #      (sem flag = radar + state + reconcile + integrity + domain + provenance + freshness + schema)
 #
 # Doutrina: docs/knowledge-base/concepts/knowledge-graph-sdaal.md
@@ -112,7 +112,7 @@ if [ "$#" -gt 2 ]; then
     # ⚠️ ALLOWLIST: modo desconhecido era fail-open SILENCIOSO — `--schemaa` sumia e somava rc=0.
     #    A classe curada aqui estava a um typo de distância de voltar pela porta ao lado.
     case "${_m}" in
-      --radar|--state|--reconcile|--integrity|--domain|--provenance|--freshness|--freshness-tsv|--open-tsv|--weights-tsv|--status-tsv|--schema|--triples|--all) : ;;
+      --radar|--state|--reconcile|--integrity|--domain|--provenance|--freshness|--freshness-tsv|--open-tsv|--weights-tsv|--status-tsv|--schema|--triples|--validade|--all) : ;;
       *) printf 'kg-radar: modo desconhecido: %s\n' "${_m}" >&2; exit 2 ;;
     esac
   done
@@ -133,10 +133,15 @@ fi
   printf '%s\n' 'uso: kg-radar.sh <arquivo.kg.yaml> [<modo>...]' \
     '      os modos COMPÕEM: "--integrity --schema" roda os dois e reprova se qualquer um reprovar' \
     '      modos: --radar|--state|--reconcile|--integrity|--domain|--provenance|--freshness' \
-    '             --freshness-tsv|--open-tsv|--weights-tsv|--status-tsv|--schema|--triples' >&2
+    '             --freshness-tsv|--open-tsv|--weights-tsv|--status-tsv|--schema|--triples|--validade' >&2
   exit 2; }
 
-awk -v mode="$MODE" -v radarSchema="$RADAR_SCHEMA" -v arq="$FILE" "${STATUS_FACTOR}"'
+# `hoje` entra como VARIÁVEL e não por `systime()` para tornar o veredito REPRODUTÍVEL — dá para
+# fixá-la num teste em vez de esperar o relógio. (A 1ª redação justificava também com "o `mawk` não
+# tem systime/strftime". Medido na passada adversarial: este radar NÃO RODA sob mawk — morre em
+# `asorti never defined`, rc=2, saída zero. A razão da portabilidade era verdadeira sobre o awk e
+# FALSA sobre este script; ficou só a que o artefato sustenta.)
+awk -v mode="$MODE" -v radarSchema="$RADAR_SCHEMA" -v arq="$FILE" -v hoje="$(date -u +%Y-%m-%d)" "${STATUS_FACTOR}"'
 # ── DENYLIST, NÃO ALLOWLIST — a lição de 2026-08-07 ─────────────────────────────────────────
 # Quando `drifted`/`unverifiable` entraram (2026-08-06), os predicados escritos como ALLOWLIST
 # (`== "confirmed"`, `confirmed || open`) os deixaram de fora EM SILÊNCIO, enquanto os escritos
@@ -298,6 +303,27 @@ section == "edges" && /^[[:space:]]*on:/ { v = $0; sub(/^[[:space:]]*on:/, "", v
 # meta: campos de governança de frescor/schema (proposta #1/#2 — ADR kg-freshness-gate)
 section == "meta" && /^[[:space:]]*schema_version:/ { v = $0; sub(/^[[:space:]]*schema_version:/, "", v); metaSchema = trim(v); next }
 section == "meta" && /^[[:space:]]*baseline:/       { v = $0; sub(/^[[:space:]]*baseline:/, "", v);       metaBaseline = trim(v); next }
+# ⚠️ `review_after` É LIDO AQUI DESDE 2026-09-18, e a razão veio de dois sinais de campo do mesmo
+# adotante (2026-09-10 e 2026-09-11). O campo existe na gramática e em 16 grafos; quem o cobrava era
+# só a REGRA 67 — SOFT, e no LINT. Então **quem rodava o radar nunca sabia que o grafo tinha vencido**,
+# e o radar saía VERDE sobre conhecimento caduco. Nas palavras do sinal: *"não é feature nova, é parar
+# de esconder"*. Não reprova (a doutrina do sinal é explícita: nada disso nasce bloqueando — gate que
+# impede trabalho é contornado com --no-verify na primeira sexta-feira, e aí se perde o mecanismo E a
+# informação). Avisa, onde todos olham.
+# ⚠️ AS MESMAS DUAS GUARDAS DO `target:` — e a lição é que elas NAO se herdam por proximidade.
+# A 1a redacao desta regra (2026-09-18) casava `^[[:space:]]*review_after:` solto, a TRINTA linhas
+# do bloco que explica, para o `target:`, as tres portas que esse padrao abre. A passada adversarial
+# do proprio PR reabriu as tres, e aqui a direcao e FAIL-OPEN (last-wins: um `review_after` futuro
+# aninhado num submapa, num bloco literal, ou num `meta:` reaberto depois de `nodes:`, SOBRESCREVE o
+# vencido e o grafo caduco sai verde). Campo novo em parser existente herda a superficie de ataque
+# do parser, nunca as curas dele.
+section == "meta" && metaClosed == 0 && /^[[:space:]]+review_after:/ {
+  if (match($0, /[^[:space:]]/) - 1 == metaFieldIndent) {
+    v = $0; sub(/^[[:space:]]*review_after:/, "", v); sub(/[[:space:]]+#.*$/, "", v)
+    metaReviewAfter = trim(v)
+  }
+  next
+}
 # `target:` é o que faz de um arquivo uma PROPOSTA: ele declara o grafo vivo onde o conteúdo vai
 # aterrissar. Ver a GUARDA DE MODO PROPOSTA na INTEGRIDADE para o que isso muda — e o que não muda.
 # ── O GATILHO DA PROPOSTA, e ele é ESTREITO DE PROPÓSITO ──────────────────────────────────────
@@ -682,6 +708,60 @@ END {
         }
       }
       if (warns == 0) print "  ✅ camada domain completa (sem lacunas nas 5 checagens)"
+      print ""
+    }
+  }
+
+  # ══ VALIDADE — o conhecimento deste grafo ainda vale? (⚠ atenção, NÃO reprova) ═════════════════
+  # Nasceu de DOIS sinais do mesmo adotante (2026-09-10 §7 e 2026-09-11 §2), e a frase deles é o
+  # desenho inteiro: *"não é feature nova, é parar de esconder"*. O campo `meta.review_after` está na
+  # gramática e em 16 grafos; quem o cobrava era só a REGRA 67 — SOFT, e no LINT. Quem rodava o radar
+  # via VERDE sobre conhecimento caduco, o que é pior que não ter o campo: é um painel que afirma
+  # saúde sem ter olhado para a validade.
+  # NÃO REPROVA, por doutrina explícita do sinal: *"nada disso nasce bloqueando — um gate que impede
+  # trabalho é contornado com --no-verify na primeira sexta-feira, e aí se perde o mecanismo E a
+  # informação"*. A métrica de saúde é o número diminuindo, como em toda catraca desta casa.
+  # ⚠️ O "NÃO MEDIDA" NASCEU NO MODO QUE NINGUEM CHAMA — e isso anulava metade da cura. A 1a redacao
+  # so declarava a ausencia em `--validade`, um modo com ZERO chamadores no repo; em `--all` (o
+  # default, e o que os 97 sitios usam) o radar ficava MUDO diante de grafo sem `review_after`.
+  # Medido no corpus vivo: 131 grafos, 25 falam, 106 calam. A frase do comentario acima — "a guarda
+  # declara que nao sabe, em vez de passar em silencio" — valia so onde ninguem olhava, que e
+  # exatamente a classe que este trabalho inteiro persegue: a guarda dizendo mais do que faz.
+  # Agora a ausencia e declarada TAMBEM em `--all`, em uma linha (o painel nao vira muro de texto).
+  if (mode == "--all" || mode == "--validade") {
+    # ⚠️ `hoje` VAZIO nao e "hoje": sem ele toda comparacao de string vira verde. Declara e para.
+    if (hoje !~ /^[0-9]{4}-[0-9][0-9]-[0-9][0-9]$/) {
+      print "══ VALIDADE — o conhecimento ainda vale? ══"
+      print "  ⚠ a data de HOJE não chegou legível ao radar — a validade NÃO FOI MEDIDA."
+      print "    (sem referência não há comparação; a guarda declara, nunca aprova por omissão)"
+      print ""
+    } else if (metaReviewAfter == "") {
+      print "══ VALIDADE — o conhecimento ainda vale? ══"
+      print "  ⚠ este grafo não declara meta.review_after — a validade NÃO FOI MEDIDA aqui."
+      if (mode == "--validade") {
+        print "    (a guarda declara que não sabe, em vez de passar em silêncio)"
+      }
+      print ""
+    } else if (metaReviewAfter !~ /^[0-9]{4}-[0-9][0-9]-[0-9][0-9]$/) {
+      # ⚠️ SEM ESTE RAMO A COMPARACAO E DE STRING CRUA, e ela aprova lixo: `em breve` e `2026-9-8`
+      # (nao zero-padded, vencido ha 10 dias) saiam AMBOS como "dentro da validade". A cura ja existia
+      # no proprio repo — a REGRA 67 (Grafo de pesquisa com REVISITA carimbada) exige AAAA-MM-DD no
+      # lint; o radar e que comparava sem olhar a forma.
+      print "══ VALIDADE — o conhecimento ainda vale? ══"
+      print "  ⚠ meta.review_after ILEGÍVEL (" metaReviewAfter ") — esperado AAAA-MM-DD."
+      print "    A validade NÃO FOI MEDIDA: comparar string crua aprovaria lixo e data sem zero à"
+      print "    esquerda (2026-9-8 é MENOR que 2026-09-18 como texto, e está vencida há 10 dias)."
+      print ""
+    } else {
+      print "══ VALIDADE — o conhecimento ainda vale? (⚠ atenção, não reprova) ══"
+      if (metaReviewAfter < hoje) {
+        print "  ⚠ REVISITA VENCIDA: meta.review_after " metaReviewAfter " < hoje " hoje
+        print "    O grafo inteiro pode estar caduco. Re-meça os nós plane:PROD (/meta:kg-freshness)"
+        print "    e o externo (/onion-research --revisit); depois carimbe review_after de novo."
+        print "    ⚠ RE-TESTAR, nunca RE-CARIMBAR: carimbo sem medição é reflexão falsa persistida."
+      } else {
+        print "  ✅ dentro da validade (review_after " metaReviewAfter " ≥ hoje " hoje ")"
+      }
       print ""
     }
   }

@@ -4318,9 +4318,9 @@ run_vendor_scrub_form_selftests() {
   # (d) O QUE A OUTRA METADE NÃO VÊ: cliente NÃO registrado no members.yaml. É a razão de existir.
   local d; d="$(mktemp -d)"; mkdir -p "${d}/.claude/utils/adopt" "${d}/.claude/commands" "${d}/docs/knowledge-base"
   cp "${REPO_ROOT}/.claude/utils/adopt/vendor-manifest.sh" "${d}/.claude/utils/adopt/"
-  printf 'a adoção da PoC Zelda&Filhos mostrou que\n' > "${d}/.claude/commands/vaza.md"
+  printf 'a adoção da PoC Lumora&Filhos mostrou que\n' > "${d}/.claude/commands/vaza.md"
   rc=0; out="$(bash "${sc}" "${d}" 2>&1)" || rc=$?
-  if grep -q 'Zelda&Filhos' <<< "${out}"; then
+  if grep -q 'Lumora&Filhos' <<< "${out}"; then
     record_pass "vendor-scrub-form: (d) pega nome comercial de cliente NÃO registrado (o buraco da derivação por members.yaml)"
   else record_fail "vendor-scrub-form: (d)" "não viu o nome não-registrado: rc=${rc} out=${out:0:200}"; fi
   # (e) MUTANTE: sem o padrão de ampersand, (d) reprova — o predicado é sensível ao mecanismo
@@ -4328,7 +4328,7 @@ run_vendor_scrub_form_selftests() {
   sed "s/^_PAT_AMP=.*/_PAT_AMP='ESTE_PADRAO_NAO_CASA_NADA'/" "${sc}" > "${mut}/m.sh"
   if grep -q 'ESTE_PADRAO_NAO_CASA_NADA' "${mut}/m.sh"; then
     out="$(bash "${mut}/m.sh" "${d}" 2>&1 || true)"
-    if ! grep -q 'Zelda&Filhos' <<< "${out}"; then
+    if ! grep -q 'Lumora&Filhos' <<< "${out}"; then
       record_pass "vendor-scrub-form: (e) MUTANTE sem o padrão de ampersand deixa o nome passar — o padrão é load-bearing"
     else record_fail "vendor-scrub-form: (e)" "mutante ainda pegou o nome — o teste não prova nada"; fi
   else record_fail "vendor-scrub-form: (e) setup" "a mutação não foi aplicada"; fi
@@ -4356,7 +4356,7 @@ run_vendor_scrub_form_selftests() {
   mkdir -p "${_gd}/.claude" "${_gd}/docs/evolution/federation"
   printf 'role: adopted\n' > "${_gd}/.claude/.onion-version"                 # FOLHA: IS_LEAF=1
   printf 'members: []\n' > "${_gd}/docs/evolution/federation/members.yaml"   # e SEM vocabulário
-  printf 'a PoC Zelda&Filhos foi medida\n' > "${_gd}/.claude/commands/vaza-g.md"
+  printf 'a PoC Lumora&Filhos foi medida\n' > "${_gd}/.claude/commands/vaza-g.md"
   # ⚠️ EXIGIR QUE O LINT TENHA COMPLETADO, antes de julgar o que ele disse. Sem isto o caso mente
   #    nos DOIS sentidos, e a passada adversarial provou os dois injetando um `exit 7` no sandbox:
   #    (g) reprovava com a mensagem "voltou a ser código morto" — diagnóstico ERRADO, que mandaria
@@ -4365,7 +4365,7 @@ run_vendor_scrub_form_selftests() {
   _gout="$(cd "${_gd}" && LC_ALL=C bash .claude/validation/lint-artifacts.sh 2>&1 || true)"
   if ! grep -q 'Sumário' <<< "${_gout}"; then
     record_fail "vendor-scrub-form: (g) o lint não completou" "o sandbox abortou antes do sumário — o caso NÃO mediu a guarda (saída: ${_gout: -200})"
-  elif grep -q 'vendor-scrub/FORMA' <<< "${_gout}" && grep -q 'Zelda&Filhos' <<< "${_gout}"; then
+  elif grep -q 'vendor-scrub/FORMA' <<< "${_gout}" && grep -q 'Lumora&Filhos' <<< "${_gout}"; then
     record_pass "vendor-scrub-form: (g) a metade por FORMA roda em role:adopted E com members.yaml vazio"
   else record_fail "vendor-scrub-form: (g)" "o detector não cobrou num adotante-folha sem termos derivados — voltou a ser código morto no destino majoritário"; fi
 
@@ -4374,7 +4374,7 @@ run_vendor_scrub_form_selftests() {
   _gout="$(cd "${_gd}" && LC_ALL=C bash .claude/validation/lint-artifacts.sh 2>&1 || true)"
   if ! grep -q 'Sumário' <<< "${_gout}"; then
     record_fail "vendor-scrub-form: (g-MUT) o lint não completou" "silêncio por aborto não é silêncio por ausência do nome"
-  elif ! grep -q 'Zelda&Filhos' <<< "${_gout}"; then
+  elif ! grep -q 'Lumora&Filhos' <<< "${_gout}"; then
     record_pass "vendor-scrub-form: (g-MUT) sem o nome plantado a guarda cala — (g) mede o nome, não o ruído"
   else record_fail "vendor-scrub-form: (g-MUT)" "acusou o nome que já foi removido — (g) não prova nada"; fi
   rm -rf "${_gd}"
@@ -4386,7 +4386,7 @@ run_vendor_scrub_form_selftests() {
   local _hd _hout
   _hd="$(mktemp -d)"
   _archive_staged "${_hd}" .claude/validation .claude/utils .claude/commands
-  printf 'a PoC Zelda&Filhos foi medida\n' > "${_hd}/.claude/commands/vaza-h.md"
+  printf 'a PoC Lumora&Filhos foi medida\n' > "${_hd}/.claude/commands/vaza-h.md"
   printf '# limpo\n' > "${_hd}/.claude/commands/limpo-h.md"
   _hout="$(cd "${_hd}" && LC_ALL=C bash .claude/validation/lint-artifacts.sh --only="${_hd}/.claude/commands/limpo-h.md" 2>&1 || true)"
   if ! grep -q 'vendor-scrub/FORMA' <<< "${_hout}"; then
@@ -16849,6 +16849,36 @@ run_door_cycle_selftests() {
   if [ "${rcm}" -ne 0 ] && grep -q 'ANDOU-PARA-TRAS' <<< "${outm}"; then
     record_pass "door-cycle: (f) o MESMO commit já em main defasa → HARD (a cura não cegou a guarda)"
   else record_fail "door-cycle: (f)" "não acusou defasagem depois do merge (rc=${rcm}): ${outm:0:140}"; fi
+
+  # (g) A CATRACA NÃO CONTA O PRÓPRIO LIVRO-CAIXA — sem isto ela é ESTEIRA, uma volta acima da (e).
+  #     Medido 2026-09-18: o commit que reconcilia o pin depois de uma materialização toca quatro
+  #     arquivos e só UM está na superfície que viaja: este baseline. Reconciliar a porta DEFASAVA a
+  #     porta, e um teto 0 exigia um PR depois de todo PR. Legitimidade da exclusão: a guarda já
+  #     exclui biografia porque a porta não a receberia; aqui a porta RECEBE o arquivo, mas a
+  #     REGRA 85 nela é [papel/SEM-OBJETO], então o conteúdo é INERTE no alvo.
+  # ⚠️ O ORÁCULO É O NÚMERO ANTES x DEPOIS, nunca o pass/fail: o caso (f) ACIMA já deixou a porta
+  #    1 atrás de propósito, então "ANDOU-PARA-TRAS" aqui seria resíduo dele, não veredito sobre o
+  #    livro-caixa. A 1ª redação deste caso reprovou por isso — defeito do CASO, com o SUT correto.
+  local _before _after
+  _before="$(bash "${sbm}/work/.claude/validation/door-staleness-check.sh" "${sbm}/work" --emit-baseline 2>/dev/null | awk '{print $2}')"
+  ( cd "${sbm}/work" && printf 'porta-x 0\n# nota nova\n' > .claude/validation/door-staleness-baseline.txt \
+      && git add -A && git -c user.email=t@l -c user.name=t commit -qm "so o livro-caixa" \
+      && git update-ref refs/remotes/origin/main HEAD ) >/dev/null 2>&1 || true
+  _after="$(bash "${sbm}/work/.claude/validation/door-staleness-check.sh" "${sbm}/work" --emit-baseline 2>/dev/null | awk '{print $2}')"
+  if [ "${_before}" = "${_after}" ]; then
+    record_pass "door-cycle: (g) commit que só mexe no PRÓPRIO baseline não move a distância (${_before}→${_after})"
+  else record_fail "door-cycle: (g)" "o livro-caixa conta contra si mesmo (${_before}→${_after}) — a catraca virou esteira"; fi
+
+  # (h) …e uma mudança REAL de framework no mesmo commit VOLTA a contar — a exclusão é cirúrgica,
+  #     não um salvo-conduto para qualquer commit que também toque o baseline.
+  ( cd "${sbm}/work" && printf '# framework de verdade\n' > .claude/agents/c.md \
+      && printf 'porta-x 0\n# outra nota\n' > .claude/validation/door-staleness-baseline.txt \
+      && git add -A && git -c user.email=t@l -c user.name=t commit -qm "framework + livro-caixa" \
+      && git update-ref refs/remotes/origin/main HEAD ) >/dev/null 2>&1 || true
+  rcm=0; outm="$(bash "${sbm}/work/.claude/validation/door-staleness-check.sh" "${sbm}/work" 2>&1)" || rcm=$?
+  if grep -q 'ANDOU-PARA-TRAS' <<< "${outm}"; then
+    record_pass "door-cycle: (h) mudança REAL junto do baseline volta a contar (exclusão cirúrgica)"
+  else record_fail "door-cycle: (h)" "a exclusão virou salvo-conduto — framework novo passou batido: ${outm:0:140}"; fi
   rm -rf "${sbm}"
 }
 
@@ -17208,6 +17238,100 @@ run_regen_completude_selftests() {
   else record_fail "regen-completude: (MUT)" "o oráculo não reage à remoção — o caso é decorativo"; fi
 }
 
+# ── AS PROJEÇÕES CORE-ONLY TÊM DONO (2026-09-17) ─────────────────────────────────────────────
+# Quatro vezes no mesmo dia eu descobri, uma a uma e PELO GATE VERMELHO, qual projeção da federação
+# tinha envelhecido depois de tocar o `members.yaml`. A cobertura estava partida em duas e só uma
+# metade tinha dono: o `regen-ssot-projections.sh` isenta esses geradores COM razão escrita, e a
+# razão vale para o ALVO — no core, a mesma isenção virava buraco.
+run_regen_core_projections_selftests() {
+  local sut="${REPO_ROOT}/.claude/validation/regen-core-projections.sh"
+  [ -f "${sut}" ] || { record_skip "regen-core: script ausente"; return; }
+  local out rc
+
+  # (a) IDEMPOTENTE no repo real: rodar duas vezes seguidas não muda nada na segunda
+  out="$(bash "${sut}" "${REPO_ROOT}" 2>&1)"; rc=$?
+  out="$(bash "${sut}" "${REPO_ROOT}" 2>&1)" || true
+  if grep -q '0 projeção' <<< "${out}"; then
+    record_pass "regen-core: (a) idempotente — 2ª passada não reescreve nada"
+  else record_fail "regen-core: (a)" "não convergiu: ${out:0:160}"; fi
+
+  # (b) O CASO QUE JUSTIFICA O SCRIPT: gerador que FALHA não pode destruir a projeção boa. É a
+  #     REGRA 62 aplicada a si mesma — e eu truncei um índice para ZERO linhas assim em 2026-09-17,
+  #     com um gerador rc=2 e um redirect direto. Aqui o sandbox tem um gerador que sai 1 e vazio.
+  local sb; sb="$(mktemp -d)"
+  mkdir -p "${sb}/.claude/validation" "${sb}/docs/onion"
+  cp "${sut}" "${sb}/.claude/validation/"
+  printf 'exit 1\n' > "${sb}/.claude/validation/graph.sh"
+  printf 'CONTEUDO BOM QUE NAO PODE SUMIR\n' > "${sb}/docs/onion/federation-map.md"
+  out="$(bash "${sb}/.claude/validation/regen-core-projections.sh" "${sb}" 2>&1)" || true
+  if grep -q 'CONTEUDO BOM QUE NAO PODE SUMIR' "${sb}/docs/onion/federation-map.md" \
+     && grep -q 'NÃO sobrescrevi' <<< "${out}"; then
+    record_pass "regen-core: (b) gerador que FALHA não destrói a projeção boa (e diz que não escreveu)"
+  else record_fail "regen-core: (b)" "projeção boa perdida ou silêncio: ${out:0:160}"; fi
+
+  # (c) SAÍDA VAZIA TAMBÉM É RECUSA — rc=0 com conteúdo abaixo do piso é o vazio-que-parece-conteúdo
+  printf 'exit 0\n' > "${sb}/.claude/validation/graph.sh"
+  out="$(bash "${sb}/.claude/validation/regen-core-projections.sh" "${sb}" 2>&1)" || true
+  if grep -q 'CONTEUDO BOM QUE NAO PODE SUMIR' "${sb}/docs/onion/federation-map.md"; then
+    record_pass "regen-core: (c) rc=0 com saída abaixo do piso também é recusado"
+  else record_fail "regen-core: (c)" "aceitou saída vazia com rc=0 — o [ -s ] que não basta"; fi
+
+  # (d) gerador AUSENTE não é falha: declara que não julgou, e não inventa arquivo
+  rm -f "${sb}/.claude/validation/graph.sh"
+  out="$(bash "${sb}/.claude/validation/regen-core-projections.sh" "${sb}" 2>&1)" || true
+  if grep -q 'NÃO julgado' <<< "${out}"; then
+    record_pass "regen-core: (d) gerador ausente → declara que não julgou (nunca inventa)"
+  else record_fail "regen-core: (d)" "não declarou o gerador ausente: ${out:0:160}"; fi
+  rm -rf "${sb}"
+}
+
+# ── A REDE DEBAIXO DA REGRA 36 (2026-09-18) ──────────────────────────────────────────────────
+# Exposição PÚBLICA e ATIVA: as fixtures da guarda-irmã usavam nomes REAIS de cliente como exemplo,
+# em `.claude/validation/` — que viaja —, logo no repo público. A guarda que impede nome de cliente
+# de viajar CONTINHA nomes de cliente, e nada acusou: os termos derivam do `members.yaml` e nenhum
+# daqueles clientes está registrado. A rede nova é uma lista DECLARADA que não viaja.
+run_client_terms_selftests() {
+  local ct="${REPO_ROOT}/docs/evolution/federation/client-terms.txt"
+  local lint="${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
+  [ -f "${lint}" ] || { record_skip "client-terms: lint ausente"; return; }
+
+  # (a) O ARQUIVO NÃO PODE VIAJAR — é a invariante que torna a cura possível em vez de ser o
+  #     vazamento. Se alguém o mover para `.claude/`, a lista de clientes vai junto no bundle.
+  if [ -f "${ct}" ]; then
+    local _viaja; _viaja="$(bash "${REPO_ROOT}/.claude/utils/adopt/vendor-manifest.sh" --repo "${REPO_ROOT}" --emit-scrub-roots 2>/dev/null \
+      | while IFS= read -r _r; do case "docs/evolution/federation/client-terms.txt" in "${_r}"/*) echo HIT ;; esac; done)"
+    if [ -z "${_viaja}" ]; then
+      record_pass "client-terms: (a) a lista de nomes NÃO está na superfície que viaja"
+    else record_fail "client-terms: (a)" "a lista de clientes ENTROU no transporte — ela virou o vazamento"; fi
+  else record_skip "client-terms: (a) arquivo ausente neste repo"; fi
+
+  # (b) um termo DECLARADO (fora do members.yaml) é pego numa superfície que viaja — era isto que
+  #     passava calado, e o custo foi exposição real num repo público.
+  local sb; sb="$(mktemp -d)"
+  mkdir -p "${sb}/.claude/validation" "${sb}/.claude/utils/adopt" "${sb}/.claude/agents" "${sb}/docs/evolution/federation"
+  cp "${lint}" "${sb}/.claude/validation/"
+  cp "${REPO_ROOT}/.claude/validation/projection-safety.sh" "${sb}/.claude/validation/" 2>/dev/null
+  cp "${REPO_ROOT}/.claude/utils/adopt/vendor-manifest.sh" "${sb}/.claude/utils/adopt/"
+  printf 'members:\n  - id: onion-x\n    kind: source\n' > "${sb}/docs/evolution/federation/members.yaml"
+  printf '# lista\nAcmeFicticia\n' > "${sb}/docs/evolution/federation/client-terms.txt"
+  printf '# agente\n\nPoC AcmeFicticia Motores em campo\n' > "${sb}/.claude/agents/a.md"
+  ( cd "${sb}" && git init -q . && git add -A ) >/dev/null 2>&1
+  local out; out="$( cd "${sb}" && bash "${sb}/.claude/validation/lint-artifacts.sh" --only="${sb}/.claude/agents/a.md" 2>&1 || true )"
+  if grep -q 'AcmeFicticia' <<< "${out}"; then
+    record_pass "client-terms: (b) termo DECLARADO (fora do members.yaml) é pego na superfície que viaja"
+  else record_fail "client-terms: (b)" "termo declarado passou calado — a rede não está ligada: ${out:0:160}"; fi
+
+  # (c) sem a lista, o comportamento antigo é idêntico — a cura não pode inventar violação
+  rm -f "${sb}/docs/evolution/federation/client-terms.txt"
+  out="$( cd "${sb}" && bash "${sb}/.claude/validation/lint-artifacts.sh" --only="${sb}/.claude/agents/a.md" 2>&1 || true )"
+  if ! grep -q 'AcmeFicticia' <<< "${out}"; then
+    record_pass "client-terms: (c) sem a lista, nada muda (a fonte nova é aditiva, não inventiva)"
+  else record_fail "client-terms: (c)" "acusou sem a lista — a fonte nova virou ruído"; fi
+  rm -rf "${sb}"
+}
+
+_family run_client_terms_selftests
+_family run_regen_core_projections_selftests
 _family run_regen_completude_selftests
 _family run_merge_dispensa_selftests
 _family run_workflow_parse_selftests

@@ -22,5 +22,21 @@
 # mergeado (pin 79456b1e21de) e espelha o core exatamente. É a catraca funcionando no sentido
 # que interessa: o número DIMINUINDO. O `onion-standalone` sobe para 374 porque a leva do #842
 # entrou em main e aquela porta segue parada desde 2026-07-19 — passivo real, não ruído.
-onion-standalone 374
-onion-core 0
+#
+# 2026-09-17 (4ª materialização): `onion-core` segue em ZERO — re-materializado do pin f5ec0dcf2dfb,
+# que é a 1ª versão da porta a passar no PRÓPRIO lint (0 HARD), depois de a dívida da REGRA 45
+# chegar a zero. `onion-standalone` sobe a 381: a main andou 7 commits e aquela porta segue parada
+# desde 2026-07-19 — passivo real, e o único número desta catraca que ainda cresce.
+#
+# 2026-09-18: a catraca parou de contar o PRÓPRIO livro-caixa, e os números caíram sem ninguém
+# materializar nada — 383→381 e 2→1. O que sumiu eram commits que só ajustavam ESTE arquivo: o
+# teto morava na superfície que ele julga, então reconciliar a porta defasava a porta e um teto 0
+# exigia um PR depois de todo PR. O `onion-core 1` que sobra é HONESTO: é o
+# `regen-core-projections.sh`, mudança real de framework que a porta ainda não recebeu.
+#
+# 2026-09-18 (pós-#845): 383 e 3 — a main andou com o merge do #845 e com a cura dos nomes de
+# cliente. Os dois sobem porque são mudança REAL de framework; o livro-caixa já não conta contra
+# si mesmo (ver acima). `onion-core` volta a ZERO na próxima materialização, que é obrigatória:
+# é ela que tira os nomes de cliente do HEAD público.
+onion-standalone 383
+onion-core 3

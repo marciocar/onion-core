@@ -2204,6 +2204,75 @@ check_model_version_fora_da_ssot() {
 
 
 # ===========================================================================
+# REGRA 87 — PR que EDITA um `.kg.yaml` enxergou os `confirmed` dele [SOFT]
+# previne: propor contra o próprio corpus — o defeito medido em 2026-09-19
+#   Em 2026-09-18 uma proposta de desenho foi ao maestro, foi SELADA, e caiu na passada
+#   adversarial do dia seguinte contra DOIS nós `confirmed` do arquivo que estava sendo
+#   editado — um deles tier 9 e textual ("não deve desenhar nada que dependa de opt-in
+#   COMO SALVAGUARDA"), o outro registrando o desenho proposto como JÁ REFUTADO. O hook
+#   da perna de leitura existia para impedir isso e não disparou (era matcher `Read`, e o
+#   trabalho passou por bash — 95,3% da superfície real, medido em 19.084 chamadas).
+#
+#   O hook foi curado. Esta regra é a SEGUNDA CAMADA, e ela existe porque a primeira avisa
+#   no meio de 16.338 chamadas de shell: um aviso ali tem chance real de passar despercebido.
+#   Aqui o sinal chega no PR, onde a proposta já está escrita e ainda dá tempo de voltar.
+#
+# ⚠️ SOFT, E A RAZÃO É DECLARADA, não timidez: esta guarda foi desenhada HORAS depois do
+#   incidente que ela endereça, e o registro do próprio achado diz que mexer às pressas num
+#   mecanismo logo após um incidente é como o incidente. SOFT dá a ela um ciclo de uso real
+#   antes de ganhar dente. O gatilho para promover a HARD: alguém reincidir na classe COM
+#   este aviso na tela — aí o aviso provou ser insuficiente, e não antes.
+#   (E a doutrina desta casa: "nada disso nasce bloqueando — um gate que impede trabalho é
+#   contornado com --no-verify na primeira sexta-feira, e aí se perde o mecanismo E a
+#   informação".)
+check_kg_edit_saw_confirmed() {
+  local base; base="$(git -C "${REPO_ROOT}" merge-base HEAD origin/main 2>/dev/null || true)"
+  [ -n "${base}" ] || return 0            # sem base comparável: não há o que julgar
+  local _r87_graphs
+  _r87_graphs="$(git -C "${REPO_ROOT}" diff --name-only "${base}" HEAD -- '*.kg.yaml' 2>/dev/null \
+             | grep -v '/fixtures/' || true)"
+  [ -n "${_r87_graphs}" ] || return 0     # PR não toca grafo: SEM-OBJETO, e silêncio é correto
+
+  local _r87_slug _r87_art
+  _r87_slug="$(git -C "${REPO_ROOT}" branch --show-current 2>/dev/null | tr '/' '-' || true)"
+  _r87_art="${REPO_ROOT}/docs/evolution/review/${_r87_slug}.md"
+  [ -f "${_r87_art}" ] || return 0        # sem resíduo: quem cobra é a REGRA 56, não esta
+
+  # ⚠️ "CITOU ALGUM DOS DE MAIOR IMPACTO", NUNCA "CITOU TODOS" — e a 1ª redação exigia TODOS, o que
+  # a tornava INSATISFAZÍVEL. Medido em 2026-09-19 sobre os 98 grafos versionados (sem fixtures):
+  # mediana 9 nós `confirmed` de impacto>=4 por grafo, 43 grafos com MAIS DE 10, e o pior com 236.
+  # Ela reprovava até o PR que a introduziu (38 nós). Um SOFT permanentemente vermelho não é sinal —
+  # é fundo, e é exatamente a patologia que este PR alega estar curando no hook.
+  # A pergunta satisfazível é outra: *você olhou ALGUM dos de maior impacto?* Citar zero dos três
+  # mais pesados de um grafo que você acabou de editar é o sinal real — foi o caso do incidente.
+  local _r87_g _r87_top _r87_i _r87_hit _r87_silent="" _r87_files=""
+  while IFS= read -r _r87_g; do
+    [ -n "${_r87_g}" ] || continue
+    _r87_top="$(LC_ALL=C awk -F': ' '
+        /^  - id:/         { id=$2; imp=0; conf=0 }
+        /^    impact:/     { imp=$2+0 }
+        /^    status: confirmed/ { conf=1 }
+        (conf==1 && imp>=4 && id!="") { print imp"\t"id; id="" }
+      ' "${REPO_ROOT}/${_r87_g}" 2>/dev/null | LC_ALL=C sort -rn -k1,1 | cut -f2 | sed -n '1,3p' || true)"
+    [ -n "${_r87_top}" ] || continue      # grafo sem `confirmed` de peso: nada a cobrar
+    _r87_hit=0
+    while IFS= read -r _r87_i; do
+      [ -n "${_r87_i}" ] || continue
+      LC_ALL=C grep -qF "${_r87_i}" "${_r87_art}" 2>/dev/null && { _r87_hit=1; break; }
+    done <<< "${_r87_top}"
+    if [ "${_r87_hit}" -eq 0 ]; then
+      _r87_files="${_r87_files}${_r87_g} "
+      [ -z "${_r87_silent}" ] && _r87_silent="$(printf '%s' "${_r87_top}" | tr '\n' ' ')"
+    fi
+  done <<< "${_r87_graphs}"
+
+  if [ -n "${_r87_files}" ]; then
+    violation "SOFT" "docs/evolution/review/${_r87_slug}.md" \
+      "[kg-edit-confirmed] o PR edita ${_r87_files% } e o resíduo não cita NENHUM dos \`confirmed\` de maior impacto desse(s) arquivo(s) (os 3 do topo: ${_r87_silent% }) — não é erro por si, mas foi EXATAMENTE assim que uma proposta selada caiu em 2026-09-19: ela contrariava dois \`confirmed\` do arquivo que estava editando. Basta conferir se algum deles já responde (ou já refuta) o que você propõe."
+  fi
+}
+
+# ===========================================================================
 # REGRA 84 — Índice de leitura do KG em sincronia com os traces [HARD]
 # previne: o hook da perna de leitura mentir POR OMISSÃO
 #   `docs/onion/kg-read-index.tsv` é PROJEÇÃO GERADA de todos os `trace:` do corpus, e é o
@@ -4108,6 +4177,7 @@ check_context_freshness_stamp
 check_inventory_total_drift
 check_model_version_fora_da_ssot
 check_kg_read_index_sync
+check_kg_edit_saw_confirmed
 check_door_staleness
 check_workflows_parse
 check_frontmatter_scalar_colon

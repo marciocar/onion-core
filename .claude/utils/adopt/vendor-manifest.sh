@@ -115,6 +115,30 @@ _base=(.claude/agents .claude/commands .claude/skills .claude/utils .claude/vali
 #                outra granularidade, outro SSOT. Declarar isso aqui é o que impede a próxima
 #                leitura de concluir "ainda é decorativo": para dois dos três papéis, não cortar É
 #                a resposta medida.
+# ⚠️ O CONDUTOR VIAJA COM O MOTOR, OU NENHUM DOS DOIS VIAJA — e esta lista nao tinha os condutores.
+# Medido em 2026-09-18, materializando o `onion-standalone` para decidir se valia re-materializa-lo:
+# a lista cortava os MOTORES da meta-fabrica (`utils/marketplace/`, `utils/wizard/`, e o
+# `commands/meta/adopt.md` pelo corte do `roles.yaml`) e deixava viajar as SKILLS QUE OS CONDUZEM.
+# Resultado: `onion-publish/SKILL.md:71` apontava para `utils/marketplace/materialize-marketplace-repo.sh`
+# e `onion-wizard/SKILL.md:50` para `commands/meta/adopt.md` — os dois caminhos EXPLICITAMENTE
+# cortados por esta mesma funcao. O comando nasce MORTO no consumidor: a skill esta la, o motor nao.
+# E `onion-publish` e declarada core-only na propria doutrina do repo (CLAUDE.md), o que torna a
+# omissao ainda mais clara — nao era duvida de desenho, era item que ninguem lembrou de acrescentar.
+# ⚠️ SO `onion-publish` SAI — E A 1a REDACAO CORTAVA TRES. A passada adversarial derrubou o corte de
+# `onion-wizard` e `onion-onboarding`, e o argumento e melhor que o meu: elas sao o CONDUTOR e o
+# ENSINO do papel, e cortá-las para calar um lint e trocar capacidade por verde. Provas que ela
+# trouxe: (1) QUATRO arquivos que viajam continuam citando as duas em PROSA — entre eles
+# `onion-guided-lifecycle.md`, que descreve a vertical de conducao inteira em termos delas —, entao
+# a porta ganharia uma KB ensinando um caminho de entrada que ela nao tem; (2) o lint NAO pega isso
+# (nao sao caminhos em backtick), logo "0 HARD" ali NAO era evidencia de ausencia; (3) ao contrario
+# de `onion-publish`, `onion-onboarding` NAO e declarada core-only em doutrina nenhuma.
+# O ponteiro morto de `onion-wizard/SKILL.md:50` volta, e a cura dele e ROLE-AWARE no texto da skill
+# (dizer que a transicao `adopt` so existe onde a meta-fabrica existe), nao deletar a skill.
+# A LICAO DE FORMA: lista de exclusao escrita A MAO envelhece pelo que se ACRESCENTA depois dela.
+# Os motores foram cortados quando existiam; as skills nasceram depois e ninguem voltou aqui. Uma
+# derivacao (cortar a skill cujo `trace`/allowed-tools aponta para caminho cortado) seria imune a
+# isso — fica NOMEADO como o proximo passo, nao feito aqui, porque exige extrair o grafo de
+# dependencia skill→motor que hoje so existe em prosa dentro de cada SKILL.md.
 _role_cut() {  # $1=papel → subcaminhos a cortar, um por linha (vazio = nada a cortar)
   case "$1" in
     standalone)
@@ -126,7 +150,8 @@ _role_cut() {  # $1=papel → subcaminhos a cortar, um por linha (vazio = nada a
         .claude/utils/wizard/ \
         .claude/utils/vertical/ \
         .claude/utils/federation-transport/ \
-        .claude/validation/federation-
+        .claude/validation/federation- \
+        .claude/skills/onion-publish/
       ;;
     *) : ;;
   esac

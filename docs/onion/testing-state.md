@@ -12,8 +12,8 @@
 
 | Dimensão | Nº | Produtor |
 |---|---:|---|
-| Famílias na bancada | **181** | `bash .claude/validation/harness-inventory.sh --env` |
-| Sítios de asserção (estáticos) | **1113** | `bash .claude/validation/harness-inventory.sh --env` |
+| Famílias na bancada | **182** | `bash .claude/validation/harness-inventory.sh --env` |
+| Sítios de asserção (estáticos) | **1123** | `bash .claude/validation/harness-inventory.sh --env` |
 | Regras do lint | **85** | `bash .claude/validation/rules-registry.sh --counts` |
 | — HARD | **76** | `bash .claude/validation/rules-registry.sh --counts` |
 | Pares de modo consumido | **49** | `bash .claude/validation/consumed-mode-check.sh .` |
@@ -39,19 +39,7 @@ bash ops/testing/collect-selftest.sh --report /tmp/r.tsv --source local
 
 ## 4. Custo e retorno da revisão de IA (REGRA 56)
 
-| Medida | Valor | Produtor |
-|---|---:|---|
-| Resíduos de revisão | **294** | `bash .claude/validation/review-ledger.sh --env` |
-| Achados totais | **1586** | `bash .claude/validation/review-ledger.sh --env` |
-| Achados REAIS | **1349** | `bash .claude/validation/review-ledger.sh --env` |
-| Precisão (reais/totais) | **85%** | `bash .claude/validation/review-ledger.sh --env` |
-| Tokens por achado REAL | **94742** | `bash .claude/validation/review-ledger.sh --env` |
-| Vereditos no vocabulário | **204** | `bash .claude/validation/review-ledger.sh --env` |
-| — legado (texto livre) | **90** | `bash .claude/validation/review-ledger.sh --env` |
-
-A média de tokens cobre os **182** resíduos com custo > 0; os demais declaram `tokens: 0`
-(custo zero DECLARADO, que não é ausência) e ficam fora da média porque divisão por zero
-não é média — mas seus achados continuam contados no total.
+⊘ **NÃO MEDIDO** — `review-ledger.sh --env` não respondeu.
 
 ## 5. O que este painel NÃO mede
 
@@ -67,4 +55,4 @@ Declarado para que a ausência não seja lida como zero:
 
 <sub>Painel gerado por `.claude/validation/testing-state.sh` a partir de
 `harness-inventory.sh`, `review-ledger.sh` e `docs/onion/metrics/selftest-runs.jsonl`.
-Produtores vivos nesta geração: 2/3.</sub>
+Produtores vivos nesta geração: 1/3.</sub>

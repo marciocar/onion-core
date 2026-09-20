@@ -2,5 +2,5 @@
 # Sem ele o onion-version.sh cai no fallback 'source' e a porta se declara a FONTE.
 role: hub
 adopted_from: onion-core
-onion_version: 86062a9141a7
+onion_version: e3f25693ea66
 materialized_at: 2026-09-20

@@ -70,6 +70,15 @@ SUMMARY_PRINTED=0
 _bench_abort_guard() {
   local rc=$?
   [ "${SUMMARY_PRINTED}" -eq 1 ] && return 0
+  # ⚠️ MODO DE LISTAGEM NAO TEM SUMARIO POR DESENHO — e a 1a redacao so olhava `SUMMARY_PRINTED`,
+  # entao ela gritava "BANCADA ABORTOU" em TODA invocacao de `--list`/`--map`/`--dry-run`, que
+  # saem antes de rodar guarda nenhuma. Medido em 2026-09-20: `--map` devolvia 337 linhas, SETE
+  # delas lixo do proprio aviso, no STDOUT que outras ferramentas parseiam — inclusive o gatilho do
+  # pre-commit que acabei de ligar ao mapa. Guarda que suja a saida que ela deveria proteger.
+  { [ "${SELFTEST_LIST:-0}" -eq 1 ] || [ "${SELFTEST_MAP:-0}" -eq 1 ] || [ "${SELFTEST_DRY:-0}" -eq 1 ]; } && return 0
+  # ⚠️ E O DIAGNOSTICO VAI PARA STDERR: stdout desta ferramenta e consumido por maquina (o mapa, a
+  # lista), e diagnostico em stdout e indistinguivel de dado. Quem le por pipe nao tem como separar.
+  exec >&2
   echo ""
   echo "✗✗ BANCADA ABORTOU ANTES DA SOMA (exit ${rc}) — o último ✓ acima NÃO é o fim da suíte."
   echo "   Sob 'set -e', um comando que retorna != 0 fora de if/&&/|| mata a suíte na hora: os casos"
@@ -287,6 +296,7 @@ PYMAP
 }
 
 # Seleciona famílias pelos arquivos tocados. Imprime a lista (vírgulas) ou ALL; o motivo vai ao stderr.
+
 _selftest_affected_families() {
   local map p hit known sel="" always
   if ! map="$(_selftest_family_map)" || [ -z "${map}" ]; then
@@ -305,6 +315,24 @@ _selftest_affected_families() {
     else
       case "${p}" in
         .claude/validation/*|.claude/hooks/*|.claude/utils/*|ops/*)
+          # ⚠️ TENTEI AFROUXAR ISTO EM 2026-09-20 E A PASSADA ADVERSARIAL REPROVOU — com razao, e o
+          # registro fica porque a tentativa foi bem-intencionada e ESTAVA ERRADA por MEDICAO.
+          # A ideia: arquivo que a bancada nao alcanca nao ganha cobertura por rodar tudo, entao o
+          # failsafe deveria DECLARAR a lacuna em vez de comprar ~30 min. A doutrina e boa; o que
+          # falhou foi o predicado e o numero.
+          # (a) FALSO-NEGATIVO PERIGOSO, medido: o mapa so enxerga referencias dentro do corpo de
+          #     `run_*_selftests()`. Chamadas em FUNCOES-HELPER sao invisiveis — e `members-validate.sh`
+          #     e EXECUTADO na l.3924 por um helper da familia `fixtures`, com 5 fixtures asseverando
+          #     seu exit code. Meu predicado dizia "nao coberto" e tirava dele o failsafe que o
+          #     protege. Mesma classe em `federation-contract-validate.sh`, `lib/pt-br-words.txt`
+          #     (o DADO que dirige a guarda de idioma) e `scaffold-diagnose-store.sh`.
+          # (b) A POPULACAO QUE JUSTIFICOU A MUDANCA ESTAVA ERRADA POR 6,6x: publiquei "13, todos em
+          #     ops/". Rodando o SELETOR REAL sobre os 253 arquivos do dominio: 86 seriam declarados
+          #     nao-cobertos, 33 rodariam tudo, 134 selecionariam familias. Eu havia medido O MEU
+          #     MODELO do codigo, nao o codigo — e "corrigi" para baixo um numero que estava
+          #     aproximadamente certo, restringindo a populacao a `ops/` sem dizer.
+          # FICA fail-closed. Reabrir exige: predicado que enxergue invocacao por helper, e a
+          # medicao refeita com o seletor real.
           echo "ALL"; echo "  failsafe: ${p} não é citado por nenhuma família → tudo (recusa no incerto)" >&2; return 0 ;;
       esac
     fi
@@ -13438,6 +13466,11 @@ run_selftest_lanes_selftests() {
     record_pass "selftest-lanes: (f) failsafe: lint-artifacts.sh ⇒ todas"
   else record_fail "selftest-lanes: (f) failsafe infra" "$(printf '%s\n' "${out}" | tail -1 | cut -c1-120)"; fi
   # (g) failsafe: arquivo do domínio citado por ninguém ⇒ TUDO (recusa no incerto)
+  #     ⚠️ Em 2026-09-20 este contrato quase mudou: a ideia era DECLARAR a lacuna em vez de comprar
+  #     ~30 min quando a bancada não alcança o arquivo. A doutrina é boa e a tentativa foi REPROVADA
+  #     pela medição — o predicado não via invocação por função-helper e declarava "não coberto"
+  #     arquivos que a bancada EXECUTA (`members-validate.sh` entre eles), e a população que
+  #     justificava a mudança estava errada por 6,6×. Fica fail-closed até haver predicado honesto.
   out="$(bash "${sut}" --affected .claude/validation/zz-nao-existe.sh --dry-run 2>&1 || true)"
   if grep -q 'famílias=<todas>' <<< "${out}"&& grep -q 'nenhuma família' <<< "${out}"; then
     record_pass "selftest-lanes: (g) failsafe: arquivo desconhecido no domínio ⇒ todas"
@@ -13523,6 +13556,8 @@ PYI
   else record_fail "selftest-lanes: (q) --report não produziu TSV com cabeçalho" "arquivo=${rep}"; fi
 
   rm -rf "${d}"
+
+
 }
 _family run_selftest_lanes_selftests
 

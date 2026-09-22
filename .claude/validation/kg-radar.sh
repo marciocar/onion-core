@@ -271,6 +271,27 @@ section == "nodes" && nid != "" {
     if (nid in verifiedAt && verifiedAt[nid] != trim(v)) dupKey[nid "|verified_at"] = verifiedAt[nid] " -> " trim(v)
     verifiedAt[nid] = trim(v)
   }
+  # BI-TEMPORAL: `valid_from` (quando o FATO passou a valer) e `source_tier` (autoridade da fonte).
+  # ⚠️ ATE 2026-09-22 O MOTOR NAO LIA NENHUM DOS DOIS — sinal de campo de um adotante (2026-09-10,
+  # item 6), que mediu a gramatica prometendo bi-temporal contra um `grep` de ZERO no motor. A
+  # massa, medida com ANCORA de campo (`^[[:space:]]+valid_from:`) no corpus de `git ls-files
+  # '*.kg.yaml'`: 110 ocorrencias de `valid_from` em 9 grafos + 343 de `source_tier` = 453 campos
+  # sem consumidor. O primeiro numero que escrevi aqui — 465/12/349 — saiu de um grep SEM ancora,
+  # que conta prosa, label e trace citando o nome do campo: a passada adversarial o derrubou, e o
+  # erro pertence a mesma classe que este commit existe para curar. Campo que ninguem le nao e
+  # gramatica, e cerimonia: quem preenche acredita estar informando o motor, e nao esta.
+  # A deteccao de CHAVE REPETIDA acima vale para os dois: um `valid_from` duplicado agora alimenta
+  # um VEREDITO, entao o last-wins silencioso deixou de ser so ruido.
+  else if (line ~ /^[[:space:]]*valid_from:/) {
+    v = line; sub(/^[[:space:]]*valid_from:/, "", v)
+    if (nid in validFrom && validFrom[nid] != trim(v)) dupKey[nid "|valid_from"] = validFrom[nid] " -> " trim(v)
+    validFrom[nid] = trim(v)
+  }
+  else if (line ~ /^[[:space:]]*source_tier:/) {
+    v = line; sub(/^[[:space:]]*source_tier:/, "", v)
+    if (nid in sourceTier && sourceTier[nid] != trim(v)) dupKey[nid "|source_tier"] = sourceTier[nid] " -> " trim(v)
+    sourceTier[nid] = trim(v)
+  }
   # Proveniência inline: a MIGALHA `arquivo:linha` (suporte de campo 2026-07-17). Âncora
   # em ^…trace: — um match solto casaria com label que cita "trace:"/"TRACES_TO" (este repo fala
   # de rastreabilidade sobre si mesmo), false-positivando a origem. Foi o PROTÓTIPO da defesa acima.
@@ -767,6 +788,63 @@ END {
   }
 
   if (mode == "--all" || mode == "--provenance") {
+    # ══ BI-TEMPORAL — o fato e a verificação são datas DIFERENTES (⚠ atenção, não reprova) ══
+    # A gramática promete `valid_from` (quando o fato passou a valer) ≠ `verified_at` (quando EU o
+    # verifiquei), mais `source_tier` (autoridade). O motor não lia nenhum até 2026-09-22 — 453
+    # campos no corpus sem consumidor. Esta seção é o mínimo que os torna LOAD-BEARING.
+    # DUAS medidas, e cada uma DECLARA o que não alcançou (a seção VALIDADE acima já tinha este
+    # molde — `ILEGÍVEL … NÃO FOI MEDIDA` — e a 1ª versão desta seção não o copiou: 65 dos 110 nós
+    # caem no gate de formato, e ela imprimia ✅ sobre ZERO comparação em 3 grafos reais):
+    #   (a) ordem — verificar um fato ANTES de ele passar a valer é impossível, e denuncia carimbo
+    #       copiado ou data trocada. Compara na GRANULARIDADE QUE O DADO TEM: a 1ª versão exigia
+    #       AAAA-MM-DD dos dois lados e, medido, isso deixava 65 dos 110 nós do corpus de fora —
+    #       não por lixo (há ZERO lixo lá), mas porque `valid_from` legítimo vem em precisão
+    #       REDUZIDA do próprio ISO-8601: `2026`, `2026-09`. Uma fonte que datou o fato pelo ano
+    #       não tem dia para dar. Como ISO-8601 ordena lexicograficamente, truncar o mais preciso
+    #       ao tamanho do mais grosso compara certo — e o que sobra de fato ilegível é DECLARADO
+    #       (o molde `ILEGÍVEL … NÃO FOI MEDIDA` que a seção VALIDADE acima já tinha).
+    #   (b) escala — `source_tier` fora de 1–10 é autoridade que o motor não consegue ler.
+    if (mode == "--all") {
+      _bt_cov = 0; _bt_cmp = 0; _bt_unread = 0; _bt_bad = ""; _bt_tier = 0; _bt_tierbad = ""
+      for (i in validFrom) {
+        if (validFrom[i] == "") continue
+        _bt_cov++
+        _vf = validFrom[i]; gsub(/^["\047]|["\047]$/, "", _vf)
+        _va = (i in verifiedAt) ? verifiedAt[i] : ""; gsub(/^["\047]|["\047]$/, "", _va)
+        if (_vf !~ /^[0-9]{4}(-[0-9][0-9](-[0-9][0-9])?)?$/ \
+            || _va !~ /^[0-9]{4}(-[0-9][0-9](-[0-9][0-9])?)?$/) { _bt_unread++; continue }
+        _bt_cmp++
+        # granularidade comum = o mais CURTO dos dois (ISO-8601 ordena por prefixo)
+        _g = (length(_vf) < length(_va)) ? length(_vf) : length(_va)
+        if (substr(_va, 1, _g) < substr(_vf, 1, _g)) {
+          _bt_bad = _bt_bad "\n    ✗ " i ": verified_at " _va " ANTES de valid_from " _vf
+        }
+      }
+      for (i in sourceTier) {
+        if (sourceTier[i] == "") continue
+        _bt_tier++
+        if (sourceTier[i] !~ /^([1-9]|10)$/) {
+          _bt_tierbad = _bt_tierbad "\n    ✗ " i ": source_tier " sourceTier[i] " fora da escala 1–10"
+        }
+      }
+      if (_bt_cov > 0 || _bt_tier > 0) {
+        print "══ BI-TEMPORAL — o fato ≠ a verificação (⚠ atenção, não reprova) ══"
+        printf "  %d nó(s) com valid_from (%d comparável(is)) · %d com source_tier\n", _bt_cov, _bt_cmp, _bt_tier
+        if (_bt_bad != "") {
+          print "  ⚠ VERIFICAÇÃO ANTES DO FATO — impossível, e denuncia carimbo copiado:" _bt_bad
+        } else if (_bt_cmp > 0) {
+          printf "  ✅ nenhuma verificação anterior ao fato, nos %d par(es) comparável(is)\n", _bt_cmp
+        }
+        if (_bt_unread > 0) {
+          printf "  ⚠ %d nó(s) com valid_from/verified_at ILEGÍVEL — a ordem NÃO FOI MEDIDA neles (esperado AAAA-MM-DD)\n", _bt_unread
+        }
+        if (_bt_tierbad != "") {
+          print "  ⚠ source_tier FORA DA ESCALA — autoridade declarada que o motor não lê:" _bt_tierbad
+        }
+        print ""
+      }
+    }
+
     print "══ PROVENIÊNCIA — decisão ancorada em origem (⚠ atenção, não reprova) ══"
     # Completude da camada AUDIT: uma decisão deveria apontar PARA a sua origem — a aresta
     # TRACES_TO (ADR/artefato) ou a migalha `trace: arquivo:linha` inline. Sem NENHUMA das

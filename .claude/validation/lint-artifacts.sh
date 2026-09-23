@@ -4418,6 +4418,54 @@ check_kg_source_tier_confidence() {
 }
 
 
+# REGRA 89 — Rodada de radar selada reconcilia o corpus que superou (Aufhebung), com catraca [SOFT]
+# previne: a UNICA divida deste corpus que piora sozinha — rodada de radar selada como baseline sem
+#   escrever o que DERRUBOU. Sem a reconciliacao, o corpus superado segue vencendo a revisita da
+#   REGRA 67 para sempre, e cada rodada nova adiciona mais um orfao. Medido 2026-09-23: 2 de 6.
+# A guarda vive em `radar-aufhebung-check.sh` (o POR QUE inteiro esta la, inclusive a razao de ela
+# aceitar `supersedes_none`/`supersedes_external`). Extraida em vez de inline por dois motivos: e o
+# molde da casa (door-staleness, identifier-language), e a bancada consegue exercita-la em segundos
+# em vez de rodar o lint INTEIRO quatro vezes — a 1a versao inline custava 12+ min numa familia so.
+_R89_BASE="${REPO_ROOT}/.claude/validation/radar-aufhebung-baseline.txt"
+check_radar_aufhebung() {
+  local sc="${SCRIPT_DIR}/radar-aufhebung-check.sh"
+  [ -f "${sc}" ] || return 0
+  local out rc=0
+  out="$(bash "${sc}" "${REPO_ROOT}" 2>&1)" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    violation "HARD" ".claude/validation/radar-aufhebung-check.sh" "REGRA 89 (Rodada de radar selada reconcilia o corpus que superou (Aufhebung), com catraca): a guarda nao pode julgar — $(printf '%s' "${out}" | head -1)"
+    return 0
+  fi
+  # CHAVEADO, nao contagem: com teto numerico, uma rodada NOVA sem Aufhebung entrando junto com
+  # uma velha reconciliada mantinha o total igual e passava despercebida. A catraca compara
+  # CONJUNTOS — entrada nao-tolerada e HARD mesmo com o numero parado.
+  local tolerated=""
+  [ -f "${_R89_BASE}" ] && tolerated="$(grep -vE '^[[:space:]]*(#|$)' "${_R89_BASE}")"
+  local fresh=0 line tag val
+  while IFS=$'\t' read -r tag val; do
+    case "${tag}" in
+      PONTEIRO-QUEBRADO)
+        violation "HARD" "docs/onion/radar-baselines.yaml" "REGRA 89 (Rodada de radar selada reconcilia o corpus que superou (Aufhebung), com catraca): a baseline aponta 'kg: ${val}', que NAO EXISTE — a rodada sai da conta sem ninguem saber. Corrija o ponteiro ou remova o eixo"
+        ;;
+      SEM-AUFHEBUNG)
+        # here-string, nao pipe: `<produtor> | grep -q` sob pipefail e corrida (o leitor fecha
+        # cedo, o escritor toma EPIPE). A guarda shell-pipefail da casa pegou este sitio no CI.
+        if grep -qxF "${val}" <<< "${tolerated}"; then
+          : # passivo conhecido, contabilizado no resumo abaixo
+        else
+          fresh=$((fresh + 1))
+          violation "HARD" "${val}" "REGRA 89 (Rodada de radar selada reconcilia o corpus que superou (Aufhebung), com catraca): rodada selada SEM Aufhebung e FORA do baseline — a catraca SO ENCOLHE. Reconcilie (no novo + SUPERSEDES datado), ou declare no bloco meta 'supersedes_none: <razao>' se nao derrubou nada, ou 'supersedes_external: <grafo>#<no>' (a aresta do motor e INTRA-arquivo, entao rodada em grafo proprio registra a Aufhebung cross-file assim). Declaracao SEM VALOR nao conta"
+        fi
+        ;;
+    esac
+  done <<< "${out}"
+  local n_tol; n_tol="$(grep -c . <<< "${tolerated}" || true)"
+  if [ "${fresh}" -eq 0 ] && [ "${n_tol:-0}" -gt 0 ]; then
+    violation "SOFT" "${_R89_BASE#"${REPO_ROOT}/"}" "REGRA 89 (Rodada de radar selada reconcilia o corpus que superou (Aufhebung), com catraca): [radar-aufhebung/PASSIVO] ${n_tol} rodada(s) selada(s) sem Aufhebung toleradas pelo baseline — a metrica de saude e esta LISTA encolhendo (reconcilie uma e regenere: bash .claude/validation/radar-aufhebung-check.sh . --emit-baseline)"
+  fi
+}
+
+
 # REGRA 69 — Roster de fontes com revisita vencida (docs/onion/radar-sources.yaml) [SOFT]
 # previne: fonte de rotina (semanal/mensal/trimestral/anual) esquecida — o roster nasceu na F2 como DADO da
 # doutrina de fontes; sem cobrança de idade vira lista decorativa. Cobra só fonte que DECLARA last_checked
@@ -4442,6 +4490,7 @@ check_radar_sources_freshness() {
     done
 }
 
+check_radar_aufhebung
 check_radar_sources_freshness
 
 # REGRA 70 — fallbackModel do settings.json é PROJEÇÃO da escada de modelos (eixo E6) [HARD]

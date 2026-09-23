@@ -8231,6 +8231,45 @@ local $(printf 'contagem')_de_erros=0"
   else record_fail "idioma: (b)" "nao acusou ou nao nomeou o segmento (rc=${rc}): $(_emit "${out}" | head -c 200)"; fi
   rm -rf "$d"
 
+  # ── JS/MJS: o universo era SO `*.sh`, e por isso um parametro em pt-BR passou pelo gate
+  #    deterministico e so o REVISOR SEMANTICO pegou, no CI, depois do PR aberto (2026-09-22).
+  _lang_repo_js() { # $1=dir  $2=conteudo do .mjs
+    mkdir -p "$1/.claude/validation/lib" "$1/.claude/workflows"
+    cp "${helper}" "$1/.claude/validation/"; cp "${words}" "$1/.claude/validation/lib/"
+    cp "${REPO_ROOT}/.claude/validation/identifier-language-baseline.txt" "$1/.claude/validation/" 2>/dev/null || :
+    printf '%s\n' "$2" > "$1/.claude/workflows/novo.mjs"
+    ( cd "$1" && git init -q . && git add -A ) >/dev/null 2>&1
+  }
+
+  # (j) `const` em pt-BR num .mjs e HARD — antes o arquivo era INVISIVEL a guarda
+  d="$(mktemp -d)"; _lang_repo_js "$d" "export const meta = { name: 'x', description: 'y' }
+const $(printf 'contagem')Total = 1"
+  rc=0; out="$(bash "$d/.claude/validation/identifier-language-check.sh" "$d" --format tsv 2>&1)" || rc=$?
+  if [ "${rc}" -eq 1 ] && grep -q 'contagem' <<< "${out}"; then
+    record_pass "idioma: (j) const em pt-BR num .mjs e HARD (o universo ve JS)"
+  else record_fail "idioma: (j)" "o .mjs seguiu invisivel (rc=${rc}): $(_emit "${out}" | head -c 200)"; fi
+  rm -rf "$d"
+
+  # (k) PARAMETRO de funcao em pt-BR — a forma EXATA que escapou. Sem este caso, a extensao do
+  #     universo cobriria declaracoes e continuaria cega ao que motivou a extensao.
+  d="$(mktemp -d)"; _lang_repo_js "$d" "export const meta = { name: 'x', description: 'y' }
+function check(de$(printf 'volvido')) { return de$(printf 'volvido') }"
+  rc=0; out="$(bash "$d/.claude/validation/identifier-language-check.sh" "$d" --format tsv 2>&1)" || rc=$?
+  if [ "${rc}" -eq 1 ] && grep -q 'volvido' <<< "${out}"; then
+    record_pass "idioma: (k) PARAMETRO em pt-BR e acusado (a forma que escapou ao gate)"
+  else record_fail "idioma: (k)" "parametro passou (rc=${rc}): $(_emit "${out}" | head -c 200)"; fi
+  rm -rf "$d"
+
+  # (l) CONTROLE: .mjs todo em ingles passa — sem isto (j)/(k) provariam so que a guarda grita
+  d="$(mktemp -d)"; _lang_repo_js "$d" "export const meta = { name: 'x', description: 'y' }
+const budgetCap = 1
+function check(reported) { return reported }"
+  rc=0; out="$(bash "$d/.claude/validation/identifier-language-check.sh" "$d" --format tsv 2>&1)" || rc=$?
+  if [ "${rc}" -eq 0 ]; then
+    record_pass "idioma: (l) .mjs em ingles PASSA (a guarda nao grita por gritar)"
+  else record_fail "idioma: (l)" "falso positivo em JS valido (rc=${rc}): $(_emit "${out}" | head -c 200)"; fi
+  rm -rf "$d"
+
   # (c) CAMELCASE — o par de (b). Casando so por `_`, `semAspas` escaparia; e era EXATAMENTE a forma
   #     dos achados reais. A medicao do #568 mostrou 3 de 636 por palavra inteira contra 10 de 12
   #     por segmento — este caso amarra essa decisao.
@@ -18433,6 +18472,191 @@ _family run_kg_scope_selftests
 # Modo projection-safety — REGRA 30: nome comercial de membro privado não sai do repo privado.
 _family run_projection_safety_selftests
 _family run_federation_projection_selftests
+
+# ── workflow-syntax-check: o harness da skill reprovava TODO script valido ─────────────────────
+# POR QUE EXISTE (medido 2026-09-22): a skill `onion-orchestration` mandava rodar
+# `node --input-type=module --check` antes de invocar o Workflow. Esse comando reprovava **2 de 2**
+# scripts validos do corpus com `Illegal return statement` — o corpo de um script Workflow roda
+# DENTRO de uma funcao async, onde `return` no topo e legal, e o `--check` como modulo nao sabe.
+# Guarda cujo vermelho e certo em 100% dos casos ensina a ignorar a guarda, e o preco e o dia em que
+# o vermelho for de verdade. O wrapper espelha o runtime antes de chamar o node.
+run_workflow_syntax_selftests() {
+  local chk="${REPO_ROOT}/.claude/validation/workflow-syntax-check.sh"
+  if [ ! -f "${chk}" ]; then record_skip "workflow-syntax: o SUT nao existe (${chk})"; return; fi
+  local d; d="$(mktemp -d)"
+
+  # (a) o CORPUS REAL passa — o caso que o harness antigo reprovava
+  local real rc_real
+  real="$(cd "${REPO_ROOT}" && git ls-files '.claude/workflows/*.js' '.claude/utils/census/*.mjs' 2>/dev/null)"
+  if [ -z "${real}" ]; then
+    record_skip "workflow-syntax: (a) nenhum script Workflow no corpus — NAO VERIFICADO"
+  else
+    # `cmd; rc=$?` sob `set -euo pipefail` MATA a suite — o caso (c) abaixo evita isto e este aqui
+    # nao evitava: um mutante que quebrasse o corpus fazia a bancada ABORTAR antes da soma, e o
+    # `record_fail` logo abaixo virava codigo morto. Achado da passada adversarial de 2026-09-22.
+    # shellcheck disable=SC2086
+    if ( cd "${REPO_ROOT}" && bash "${chk}" ${real} ) >/dev/null 2>&1; then rc_real=0; else rc_real=1; fi
+    if [ "${rc_real}" -eq 0 ]; then
+      record_pass "workflow-syntax: (a) os $(printf '%s\n' ${real} | wc -l) script(s) REAIS do corpus passam"
+    else record_fail "workflow-syntax: (a)" "o corpus valido foi reprovado (rc=${rc_real}) — o falso-negativo voltou"; fi
+  fi
+
+  # (b) `return` no topo (a forma que o runtime EXECUTA) e valido
+  printf '%s\n' 'export const meta = { name: "a", description: "b" }' \
+    'const v = await agent("x")' 'if (!v) return { error: "vazio" }' 'return { ok: 1 }' > "${d}/topo.mjs"
+  if bash "${chk}" "${d}/topo.mjs" >/dev/null 2>&1; then
+    record_pass "workflow-syntax: (b) return no topo do corpo e ACEITO (o runtime o executa)"
+  else record_fail "workflow-syntax: (b)" "reprovou a forma canonica do Workflow"; fi
+
+  # (c) MODO-DE-FALHA: crase perdida em template literal (o defeito que a skill nomeia)
+  printf '%s\n' 'export const meta = { name: "a", description: "b" }' \
+    'const s = `template sem fechar' 'return { ok: 1 }' > "${d}/crase.mjs"
+  # `_o="$(cmd)"` com cmd saindo !=0 MATA a suite sob `set -e` — e o aviso da propria bancada
+  # nomeia este idioma. Capture dentro de `if`, nunca com `; rc=$?`.
+  local _o _rc
+  if _o="$(bash "${chk}" "${d}/crase.mjs" 2>&1)"; then _rc=0; else _rc=1; fi
+  if [ "${_rc}" -ne 0 ] && LC_ALL=C grep -qi 'SyntaxError' <<< "${_o}"; then
+    record_pass "workflow-syntax: (c) crase perdida e ACUSADA, com o erro na saida"
+  else record_fail "workflow-syntax: (c)" "sintaxe quebrada passou: $(_emit "${_o}" | head -c 160)"; fi
+
+  # (d) arquivo AUSENTE e falha declarada, nunca zero silencioso — e a MENSAGEM tem de dizer isso.
+  # A 1a versao so exigia rc!=0, e o mutante que apagava a checagem `[ ! -f ]` SOBREVIVIA: o python
+  # falhava ao abrir e o veredito se mantinha por acidente, com mensagem enganosa. Achado da passada
+  # adversarial de 2026-09-22 (A6): guarda cuja linha e deletavel sem a bancada reagir nao esta fixada.
+  local _od _rd
+  if _od="$(bash "${chk}" "${d}/nao-existe.mjs" 2>&1)"; then _rd=0; else _rd=1; fi
+  if [ "${_rd}" -ne 0 ] && LC_ALL=C grep -q 'arquivo ausente' <<< "${_od}"; then
+    record_pass "workflow-syntax: (d) arquivo ausente REPROVA NOMEANDO a causa"
+  else record_fail "workflow-syntax: (d)" "alvo inexistente: rc=${_rd}, saida: $(_emit "${_od}" | head -c 140)"; fi
+
+  # (f) REGRESSAO QUE EU ABRI E O REFUTADOR ACHOU: a 1a cura do contador de chaves tirava `export`
+  # de QUALQUER declaracao de topo, e com isso um `export const z = 1` perdido no corpo — que E
+  # SyntaxError no runtime — passava a valer. A ancora tem de ser estreita (so `export const meta`).
+  printf '%s\n' 'export const meta = { name: "a", description: "b" }' \
+    'export const z = 1' 'return { ok: 1 }' > "${d}/export-no-corpo.mjs"
+  if ! bash "${chk}" "${d}/export-no-corpo.mjs" >/dev/null 2>&1; then
+    record_pass "workflow-syntax: (f) export perdido no CORPO ainda reprova (ancora estreita)"
+  else record_fail "workflow-syntax: (f)" "o strip largo voltou — export ilegal no corpo virou legal"; fi
+
+  # (g) chave desbalanceada em STRING do meta nao degrada o wrapper (o falso negativo do A3)
+  printf '%s\n' 'export const meta = { name: "a", description: "tem { chave solta" }' \
+    'const s = `crase sem fechar' 'return 1' > "${d}/chave-string.mjs"
+  if ! bash "${chk}" "${d}/chave-string.mjs" >/dev/null 2>&1; then
+    record_pass "workflow-syntax: (g) chave em string do meta nao cega o check (erro real pego)"
+  else record_fail "workflow-syntax: (g)" "voltou a contar chaves — corpo vazio, check cego"; fi
+
+  # (h) `export const meta` dentro de COMENTARIO nao reprova script valido (o falso positivo do A3;
+  # nao e hipotetico — o onion-research.js tem 12 linhas de comentario acima do meta)
+  printf '%s\n' '// contrato: escreva `export const meta = {...}` no topo' \
+    'export const meta = { name: "a", description: "b" }' 'return { ok: 1 }' > "${d}/meta-comentario.mjs"
+  if bash "${chk}" "${d}/meta-comentario.mjs" >/dev/null 2>&1; then
+    record_pass 'workflow-syntax: (h) export-const-meta em COMENTARIO nao reprova script valido'
+  else record_fail "workflow-syntax: (h)" "comentario citando o meta derrubou script valido"; fi
+
+  # (i) FERRAMENTA AUSENTE => exit 2 (nao pude julgar), nunca 0 nem 1
+  local _fakebin; _fakebin="$(mktemp -d)"
+  printf '#!/bin/sh\nexit 127\n' > "${_fakebin}/node"; chmod +x "${_fakebin}/node"
+  local _oi _ri
+  if _oi="$(PATH="${_fakebin}:/usr/bin:/bin" bash "${chk}" "${d}/topo.mjs" 2>&1)"; then _ri=0; else _ri=$?; fi
+  rm -rf "${_fakebin}"
+  if [ "${_ri}" -eq 2 ] || LC_ALL=C grep -qi 'NAO PUDE JULGAR\|não pude julgar' <<< "${_oi}"; then
+    record_pass "workflow-syntax: (i) ferramenta quebrada => nao pude julgar (!= passou)"
+  else record_fail "workflow-syntax: (i)" "node quebrado deu rc=${_ri}: $(_emit "${_oi}" | head -c 140)"; fi
+
+  # (e) script SEM bloco meta ainda e checado (nao pula calado)
+  printf '%s\n' 'const s = `sem fechar' 'return 1' > "${d}/semmeta.mjs"
+  if ! bash "${chk}" "${d}/semmeta.mjs" >/dev/null 2>&1; then
+    record_pass "workflow-syntax: (e) script sem meta com erro real REPROVA (nao vira no-op)"
+  else record_fail "workflow-syntax: (e)" "sem meta virou passe livre"; fi
+
+  rm -rf "${d}"
+}
+_family run_workflow_syntax_selftests
+
+# ── selftest-shard-plan: a matriz do CI nasce daqui, e matriz torta e gate cego ────────────────
+# POR QUE EXISTE (2026-09-23): o job do selftest encostou DUAS VEZES no teto de 40 min e a cura
+# foi shardar em 4 faixas de matriz. Dai em diante, QUALQUER familia que o plano perca deixa de
+# ser exercida no CI — e o job sai VERDE, porque as faixas que rodaram passaram. O plano virou
+# superficie critica: perder familia e pior que reprovar, porque nao aparece.
+run_shard_plan_selftests() {
+  local sut="${REPO_ROOT}/ops/testing/selftest-shard-plan.sh"
+  if [ ! -f "${sut}" ]; then record_skip "shard-plan: o SUT nao existe (${sut})"; return; fi
+
+  # (a) COBERTURA EXATA: toda familia do --list aparece em UMA faixa, nenhuma some, nenhuma repete.
+  local plano rc
+  if plano="$(bash "${sut}" 4 2>&1)"; then rc=0; else rc=1; fi
+  if [ "${rc}" -ne 0 ]; then
+    record_fail "shard-plan: (a)" "o plano falhou (rc=${rc}): $(_emit "${plano}" | head -c 160)"
+  else
+    local ver
+    ver="$(printf '%s' "${plano}" | ONION_ROOT="${REPO_ROOT}" python3 -c '
+import json, os, subprocess, sys
+sh = json.load(sys.stdin)
+got = [f for s in sh for f in s["familias"].split(",")]
+want = [l.strip() for l in subprocess.run(
+    ["bash", os.environ["ONION_ROOT"] + "/.claude/validation/lint-selftest.sh", "--list"],
+    capture_output=True, text=True).stdout.splitlines() if l.strip()]
+if not want:
+    print("SEM-LISTA"); raise SystemExit(0)
+if sorted(got) == sorted(want) and len(got) == len(set(got)):
+    print("OK")
+else:
+    print("DIVERGE perdidas=%d duplicadas=%d" % (len(set(want) - set(got)), len(got) - len(set(got))))
+' 2>&1)"
+    if [ "${ver}" = "OK" ]; then
+      record_pass "shard-plan: (a) cobertura EXATA — nenhuma familia perdida nem duplicada"
+    else record_fail "shard-plan: (a)" "cobertura quebrada: ${ver}"; fi
+  fi
+
+  # (b) ROUND-ROBIN e nao bloco contiguo: familias vizinhas caem em faixas DIFERENTES. Bloco
+  #     contiguo concentraria o caro numa faixa so, e o gargalo que a cura resolve voltaria.
+  local rr
+  rr="$(printf '%s' "${plano}" | python3 -c '
+import json, sys
+sh = json.load(sys.stdin)
+f1 = sh[0]["familias"].split(",")
+f2 = sh[1]["familias"].split(",") if len(sh) > 1 else []
+print("OK" if f1 and f2 and f1[0] != f2[0] else "CONTIGUO")
+' 2>&1)"
+  if [ "${rr}" = "OK" ]; then
+    record_pass "shard-plan: (b) distribuicao e round-robin (faixas nao sao blocos contiguos)"
+  else record_fail "shard-plan: (b)" "voltou a bloco contiguo: ${rr}"; fi
+
+  # (c) N INVALIDO nao vira plano silencioso
+  local bad=0
+  bash "${sut}" 0   >/dev/null 2>&1 || bad=$((bad+1))
+  bash "${sut}" abc >/dev/null 2>&1 || bad=$((bad+1))
+  if [ "${bad}" -eq 2 ]; then
+    record_pass "shard-plan: (c) N invalido (0, nao-numerico) REPROVA"
+  else record_fail "shard-plan: (c)" "N invalido produziu plano (so ${bad} de 2 reprovaram)"; fi
+
+  # (d) SUT AUSENTE: o plano DECLARA que nao pode planejar, nunca devolve matriz vazia — matriz
+  #     vazia faz a suite inteira nao rodar e o job sair VERDE.
+  local d; d="$(mktemp -d)"; mkdir -p "$d/ops/testing" "$d/.claude/validation"
+  cp "${sut}" "$d/ops/testing/"
+  local rcd
+  if ( cd "$d" && bash ops/testing/selftest-shard-plan.sh 4 ) >/dev/null 2>&1; then rcd=0; else rcd=$?; fi
+  if [ "${rcd}" -eq 2 ]; then
+    record_pass "shard-plan: (d) sem o SUT da bancada, DECLARA (exit 2) em vez de plano vazio"
+  else record_fail "shard-plan: (d)" "sem SUT saiu rc=${rcd} (esperado 2 — nao pude planejar != plano vazio)"; fi
+  rm -rf "$d"
+
+  # (e) LISTA VAZIA => exit 1. E o fail-open mais caro num gate de gate: matriz vazia = job verde
+  #     que nao exerceu NADA. Fixture: um --list que devolve zero linhas com rc 0.
+  local e; e="$(mktemp -d)"; mkdir -p "$e/ops/testing" "$e/.claude/validation"
+  cp "${sut}" "$e/ops/testing/"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$e/.claude/validation/lint-selftest.sh"
+  chmod +x "$e/.claude/validation/lint-selftest.sh"
+  local rce
+  if ( cd "$e" && bash ops/testing/selftest-shard-plan.sh 4 ) >/dev/null 2>&1; then rce=0; else rce=$?; fi
+  if [ "${rce}" -eq 1 ]; then
+    record_pass "shard-plan: (e) lista VAZIA reprova (exit 1) — matriz vazia nunca vira verde"
+  else record_fail "shard-plan: (e)" "lista vazia saiu rc=${rce} (esperado 1)"; fi
+  rm -rf "$e"
+}
+_family run_shard_plan_selftests
+
+
 
 # ---------------------------------------------------------------------------
 # Sumário

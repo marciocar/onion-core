@@ -74,6 +74,31 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
+# A MORTE DO LINT NAO PODE PASSAR POR VEREDITO (medido 2026-09-23, na porta publica)
+# ---------------------------------------------------------------------------
+# O `set -e` acima + um `grep` que LEGITIMAMENTE nao casa mataram este lint DENTRO de uma funcao
+# (`check_radar_aufhebung`, baseline vazio): rc=1, ZERO sumario, e o CI leu esse rc=1 como "achou
+# violacao HARD". Gate morto disfarcado de julgamento e pior que crash — manda alguem cacar uma
+# violacao que nao existe, e o defeito real segue de pe. Foram DUAS hipoteses erradas antes de
+# medir, porque a morte era silenciosa: nada na saida dizia que a varredura nao completou.
+# O flag prova que o sumario FOI alcancado. Qualquer saida antes dele e `NAO PUDE JULGAR` e sai 2 —
+# a mesma convencao dos scripts-irmaos (0 pode julgar · 1 veredito · 2 nao pude).
+_LINT_SUMMARY_REACHED=0
+_lint_on_exit() {
+  local rc="$1"
+  trap - EXIT                                     # sem recursao
+  if [ "${_LINT_SUMMARY_REACHED}" -eq 1 ]; then exit "${rc}"; fi
+  echo ""
+  echo "MORREU  O lint terminou ANTES do sumario (rc=${rc}) — NAO PUDE JULGAR (nao e 'zero HARD',"
+  echo "        nem veredito). As violacoes acima sao PARCIAIS: a varredura nao completou."
+  echo "        Diagnostico: rode \`bash -x\` e leia a ULTIMA linha rastreada. O modo-de-falha"
+  echo "        conhecido e \`set -e\` sobre comando que legitimamente nao casa (grep sem"
+  echo "        resultado, array vazio) fora de uma guarda \`|| true\`."
+  exit 2
+}
+trap '_lint_on_exit "$?"' EXIT
+
+# ---------------------------------------------------------------------------
 # Resolução de caminhos: suporte a execução de qualquer diretório
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -136,7 +161,11 @@ if [ -n "${ONLY_PATH}" ]; then
     /*) ;;
     *) ONLY_PATH="$(cd "$(dirname "${ONLY_PATH}")" 2>/dev/null && pwd)/$(basename "${ONLY_PATH}")" ;;
   esac
-  [ -f "${ONLY_PATH}" ] || { echo "ERRO: --only: arquivo inexistente: ${ONLY_PATH}" >&2; exit 2; }
+  # A6 (revisor independente, 2026-09-24): esta e a UNICA saida legitima antes do sumario, e sem o
+  # flag ela herdava o banner `MORREU` dizendo "as violacoes acima sao PARCIAIS" e "rode bash -x" —
+  # diagnostico enganoso num caso onde nada foi varrido e a causa e o ARGUMENTO. O rc 2 esta certo
+  # (nao pude julgar); errado era o texto. Ligar o flag aqui deixa o trap calado e preserva o rc.
+  [ -f "${ONLY_PATH}" ] || { _LINT_SUMMARY_REACHED=1; echo "ERRO: --only: arquivo inexistente: ${ONLY_PATH}" >&2; exit 2; }
 fi
 FIXED_FILES=0
 declare -a FIX_LOG=()
@@ -4440,7 +4469,21 @@ check_radar_aufhebung() {
   # uma velha reconciliada mantinha o total igual e passava despercebida. A catraca compara
   # CONJUNTOS — entrada nao-tolerada e HARD mesmo com o numero parado.
   local tolerated=""
-  [ -f "${_R89_BASE}" ] && tolerated="$(grep -vE '^[[:space:]]*(#|$)' "${_R89_BASE}")"
+  # `|| true` NAO e decoracao: com o baseline VAZIO (o caso da porta publica, medido 2026-09-23) o
+  # `grep -v` nao casa nada, devolve 1, a lista `&&` termina em falha e o `set -e` da linha 74 MATA
+  # o lint aqui — sem imprimir nada. O rc virava 1 e o CI o lia como "achou HARD": o gate morto
+  # disfarcado de veredito. Baseline vazio e MISSING agora sao o mesmo caminho (tolerated="").
+  # A7 (revisor independente, 2026-09-24): o `|| true` engolia tambem "existe e NAO e legivel", e o
+  # PRODUTOR irmao (radar-aufhebung-check.sh:108) trata esse caso como classe propria: `[ -r ] ||
+  # exit 2` com "nao pude julgar (≠ zero)". O efeito do `|| true` e fail-CLOSED (tolerated="" faz
+  # tudo virar HARD), entao nao havia falso-verde — mas o operador recebia enxurrada de HARD espurios
+  # em vez do rotulo certo, e a unica pista era um `Permission denied` no stderr que o
+  # `lint-summary.sh` nem le. Agora o consumidor fala a mesma lingua do produtor.
+  if [ -e "${_R89_BASE}" ] && [ ! -r "${_R89_BASE}" ]; then
+    violation "HARD" "${_R89_BASE#"${REPO_ROOT}/"}" "REGRA 89 (Rodada de radar selada reconcilia o corpus que superou (Aufhebung), com catraca): o baseline da catraca EXISTE e NAO e legivel — NAO PUDE JULGAR (≠ zero tolerado). Conserte a permissao; sem ler o baseline nao se sabe o que esta tolerado."
+    return 0
+  fi
+  [ -f "${_R89_BASE}" ] && tolerated="$(grep -vE '^[[:space:]]*(#|$)' "${_R89_BASE}" || true)"
   local fresh=0 line tag val
   while IFS=$'\t' read -r tag val; do
     case "${tag}" in
@@ -4904,6 +4947,7 @@ check_plugin_deps_contract
 # ===========================================================================
 # SUMÁRIO FINAL
 # ===========================================================================
+_LINT_SUMMARY_REACHED=1   # daqui para baixo, a saida E veredito (ver o trap no topo)
 echo ""
 echo "=== Sumário ==="
 echo "  Violações HARD : ${HARD_COUNT}"

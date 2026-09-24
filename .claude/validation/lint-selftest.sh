@@ -616,10 +616,15 @@ _emit() { printf '%s\n' "$1" 2>/dev/null || true; }
 # Modo lint — injeta a fixture no sandbox e assere por path
 # ---------------------------------------------------------------------------
 run_lint_fixture() {
-  local fixture="$1" target="$2" verdict="$3" keyword="$4"
+  local fixture="$1" target="$2" verdict="$3" keyword="$4" inject="${5:-}"
   local src="${FIX_DIR}/${fixture}"
   local dst_dir="${SANDBOX}/${target}"
-  local dst="${dst_dir}/${INJECT_NAME}"
+  # nome de injecao POR LINHA (6a coluna); vazio = o nome historico `.md`. A ancora de citacao
+  # acompanha: com nome custom ela e o nome INTEIRO (o lint imprime o path), senao segue o
+  # `INJECT_BASE` sem extensao, que e como as 110 linhas antigas casam.
+  local iname="${inject:-${INJECT_NAME}}"
+  local ianchor="${INJECT_BASE}"; [ -n "${inject}" ] && ianchor="${inject}"
+  local dst="${dst_dir}/${iname}"
 
   if [ ! -f "${src}" ]; then
     record_fail "${fixture}" "fixture inexistente: ${src}"
@@ -648,7 +653,7 @@ run_lint_fixture() {
 
   # Linhas de violação que citam o arquivo injetado (âncora-por-path)
   local cited
-  cited="$(printf '%s\n' "${out}" | grep -F "${INJECT_BASE}" || true)"
+  cited="$(printf '%s\n' "${out}" | grep -F "${ianchor}" || true)"
 
   case "${verdict}" in
     bad)
@@ -1792,10 +1797,22 @@ run_rules_registry_selftests() {
   # (f) GUARD verde no estado real (--only escopa ao doc)
   # (2026-09-03) era `bash lint | grep -q 'OK ✓'`: o grep -q fecha o pipe no 1º match, o lint leva SIGPIPE e,
   # sob pipefail, o `if` vê falha — corrida que só aparecia com a bancada em paralelo (2 runs de 8 workers, 2×).
+  # (2026-09-23) era `grep -q 'OK ✓'`, e isso media o REPO INTEIRO, nao a REGRA 39: o `--only` nao e
+  # honrado por toda guarda (door-staleness, por exemplo, julga sempre), entao qualquer HARD alheio
+  # derrubava este caso com a mensagem "REGRA 39 acusou o estado real" — acusacao FALSA, e foi
+  # exatamente o que aconteceu: reprovou por a porta publica estar 4 commits defasada. Guarda que
+  # declara menos do que mede e a classe que esta casa persegue; o caso agora mede o que nomeia.
   local f_out; f_out="$(bash "${lint}" --only="${doc}" 2>&1 || true)"
-  if grep -q 'OK ✓' <<< "${f_out}"; then
+  # PROVA POSITIVA DE TERMINO ANTES da asserção negativa (refutador independente, 2026-09-24): minha
+  # 1a cura trocou `grep -q 'OK ✓'` por uma asserção só NEGATIVA, e lint MORTO nao imprime VIOLATION
+  # nenhuma — logo a morte era lida como "REGRA 39 verde". Ironia medida: foi esta mesma leva que
+  # criou o rotulo MORREU para que morte silenciosa deixasse de passar por veredito. O sinal estava
+  # DENTRO da variavel que o caso captura; faltava olhar.
+  if ! grep -q '=== Sumário ===' <<< "${f_out}" || grep -q '^MORREU' <<< "${f_out}"; then
+    record_skip "rules-registry: (f) o lint nao chegou ao sumario (morreu antes) — NAO PUDE julgar a REGRA 39"
+  elif ! grep -qE 'VIOLATION: .*lint-rules\.md: .*(registro desatualizado|registro ausente|gerador do registro)' <<< "${f_out}"; then
     record_pass "rules-registry: (f) REGRA 39 verde no estado real (--only lint-rules.md)"
-  else record_fail "rules-registry: (f)" "REGRA 39 acusou o estado real (deveria estar em paridade)"; fi
+  else record_fail "rules-registry: (f)" "REGRA 39 acusou o estado real (deveria estar em paridade): $(grep -m1 'lint-rules.md' <<< "${f_out}")"; fi
 }
 
 # Modo onion-version-tracked — REGRA 40. Um adotante (role: adopted) TEM que trackear o .onion-version;
@@ -12218,7 +12235,19 @@ run_session_beacon_selftests() {
   fake_dir="$(mktemp -d)"
   if cp "$(command -v sleep)" "${fake_dir}/claude" 2>/dev/null; then
     "${fake_dir}/claude" 30 & fake_pid=$!
-    if [ "$(cat "/proc/${fake_pid}/comm" 2>/dev/null || true)" = "claude" ]; then
+    # ESPERA O `exec`, com teto. A 1a forma lia `/proc/<pid>/comm` NA HORA, e isso e corrida: entre o
+    # `&` e o exec do filho o comm ainda e o do shell, o caso caia no `record_skip` e sob
+    # ONION_SELFTEST_STRICT=1 o ⊘ PINTA O CI DE VERMELHO. Medido 2026-09-23: a mesma faixa passou as
+    # 18:33 e reprovou as 23:45 sem nenhuma mudanca no SUT — assinatura de corrida, nao de host.
+    # Teto de 2s (40 x 50ms) e o comm OBSERVADO entra na mensagem: skip sem dizer o que viu e flaky
+    # para sempre.
+    local _fake_comm=""
+    for _ in $(seq 40); do
+      _fake_comm="$(cat "/proc/${fake_pid}/comm" 2>/dev/null || true)"
+      [ "${_fake_comm}" = "claude" ] && break
+      sleep 0.05
+    done
+    if [ "${_fake_comm}" = "claude" ]; then
       ONION_BEACON_OWNER_PID="${fake_pid}" bash "${sb}" up "${d}" "sess-eleito"
       out="$(awk -F': ' '/^owner_pid:/{print $2; exit}' "${d}/.claude/beacons/sess-eleito.beacon" 2>/dev/null || true)"
       if [ "${out}" = "${fake_pid}" ] \
@@ -12242,7 +12271,7 @@ run_session_beacon_selftests() {
       else record_fail "session-beacon: sweep preserva" "sweep apagou beacon de sessão viva"; fi
       bash "${sb}" down "${d}" "sess-eleito"
     else
-      record_skip "session-beacon: sonda elege/preserva/sweep-vivo — comm não observável neste host"
+      record_skip "session-beacon: sonda elege/preserva/sweep-vivo — comm não observável neste host após 2s de espera (último comm visto: '${_fake_comm:-<vazio>}')"
     fi
     kill "${fake_pid}" 2>/dev/null || true; wait "${fake_pid}" 2>/dev/null || true
   else
@@ -12685,11 +12714,27 @@ run_fixtures_selftests() {
 local _shard_i=0 _shard_n=1 _shard_k=0
 case "${SELFTEST_SHARD:-}" in */*) _shard_i="${SELFTEST_SHARD%/*}"; _shard_n="${SELFTEST_SHARD#*/}" ;; esac
 if [ -f "${MANIFEST}" ]; then
-  while IFS=$'\t' read -r kind fixture target verdict keyword || [ -n "${kind:-}" ]; do
+  # 6a coluna OPCIONAL `inject` (2026-09-23): o nome do arquivo injetado era FIXO em
+  # `selftest-fixture-probe.md`, e isso tornava o §11.1 de commands.md INSATISFAZIVEL para toda guarda
+  # cujo universo nao seja `.md` — a REGRA 89 (Rodada de radar selada reconcilia o corpus que superou
+  # (Aufhebung), com catraca) varre `*/radar-*/*.kg.yaml`, entao nenhuma fixture do manifesto jamais a
+  # alcancaria. A norma exige fixture para toda guarda alterada; sem esta coluna, obedecer era
+  # impossivel e a unica saida era dispensa. Coluna vazia = o nome antigo, entao as 110 linhas
+  # existentes seguem intactas.
+  while IFS=$'\t' read -r kind fixture target verdict keyword inject || [ -n "${kind:-}" ]; do
     kind="${kind:-}"
     [ -z "${kind}" ] && continue
     [ "${kind#\#}" != "${kind}" ] && continue   # linha de comentário
     [ "${kind}" = "kind" ] && continue           # header
+    # SENTINELA `-` PARA CAMPO VAZIO (refutador independente, 2026-09-24): `IFS=$'\t'` trata TAB como
+    # IFS-whitespace, entao TABs consecutivos COLAPSAM num delimitador so. Consequencia medida: numa
+    # linha de 5o campo vazio (`good`/`exempt`/`pass`/`fail` — 22 delas ja terminam em TAB hoje), dar
+    # nome de injecao fazia o valor cair em `keyword` e `inject` ficar vazio, EM SILENCIO: a fixture
+    # voltava a ser injetada como `.md`. A coluna nova era inalcancavel justamente para as linhas que
+    # mais precisariam dela (o caso `good`/`exempt` que o §11.1 pede). `-` e o idioma que este
+    # manifesto ja usa na coluna `target` das linhas `members`.
+    [ "${keyword:-}" = "-" ] && keyword=""
+    [ "${inject:-}" = "-" ] && inject=""
     _shard_k=$(( _shard_k + 1 ))
     [ $(( (_shard_k - 1) % _shard_n )) -eq "${_shard_i}" ] || continue
     # CORE-ONLY no adotante (Q_SELFTEST_VENDORIZADO_INSATISFAZIVEL_NO_ADOTANTE, cura (a), 2026-09-03): em repo
@@ -12702,7 +12747,7 @@ if [ -f "${MANIFEST}" ]; then
       esac
     fi
     case "${kind}" in
-      lint)     run_lint_fixture "${fixture}" "${target}" "${verdict}" "${keyword:-}" ;;
+      lint)     run_lint_fixture "${fixture}" "${target}" "${verdict}" "${keyword:-}" "${inject:-}" ;;
       fix)      run_fix_fixture "${fixture}" "${target}" "${verdict}" ;;
       contract) run_contract_fixture "${fixture}" "${verdict}" ;;
       members)  run_members_fixture "${fixture}" "${verdict}" ;;
@@ -18782,6 +18827,143 @@ run_radar_aufhebung_selftests() {
   rm -rf "$d"
 }
 _family run_radar_aufhebung_selftests
+
+# ---------------------------------------------------------------------------
+# O LINT NAO MORRE CALADO — o lado CONSUMIDOR da REGRA 89 e o rotulo de morte
+# ---------------------------------------------------------------------------
+# POR QUE EXISTE (medido 2026-09-23, na porta publica): a familia acima exercita o SUT
+# (`radar-aufhebung-check.sh`) e passava verde enquanto o CONSUMIDOR dele, dentro do
+# `lint-artifacts.sh`, MORRIA. Com o baseline VAZIO — o caso da porta, e o caso de qualquer
+# adotante que nunca reconciliou nada — o `grep -v` nao casa nada, devolve 1, a lista `&&` termina
+# em falha e o `set -e` mata o lint DENTRO da funcao: rc=1, zero sumario, e o CI lendo aquele rc=1
+# como "achou violacao HARD". Foram DUAS hipoteses erradas antes de medir, porque a morte era
+# silenciosa. Bancada que testa so o produtor nao ve isto — o defeito vive na juncao.
+run_lint_silent_death_selftests() {
+  local lint="${SCRIPT_DIR}/lint-artifacts.sh"
+  if [ ! -f "${lint}" ]; then record_skip "lint-morte: o SUT nao existe (${lint})"; return; fi
+  local d; d="$(mktemp -d)"
+
+  # stub do produtor: o consumidor o invoca como `bash "${SCRIPT_DIR}/radar-aufhebung-check.sh"`
+  _lm_stub() { printf '#!/usr/bin/env bash\n%s\nexit 0\n' "$1" > "$d/radar-aufhebung-check.sh"; }
+  # roda SO a funcao consumidora, com as MESMAS opcoes de shell do runner (`set -euo pipefail`) —
+  # sem elas o caso nao reproduz nada, que e o erro que esta bancada ja cometeu antes
+  _lm_run() { # $1=conteudo do baseline (vazio = arquivo de 0 bytes)
+    printf '%s' "$1" > "$d/base.txt"
+    bash -c '
+      set -euo pipefail
+      SCRIPT_DIR="'"$d"'"; REPO_ROOT="'"$d"'"; _R89_BASE="'"$d"'/base.txt"
+      violation() { echo "V[$1] $2 :: $3"; }
+      source <(sed -n "/^check_radar_aufhebung()/,/^}$/p" "'"${lint}"'")
+      check_radar_aufhebung
+      echo "SOBREVIVEU"
+    ' 2>&1
+  }
+
+  _lm_stub ''                                                   # produtor sem acusacao
+  local o; o="$(_lm_run '' || true)"
+  if grep -q 'SOBREVIVEU' <<< "${o}"; then
+    record_pass "lint-morte: (a) baseline VAZIO nao mata o consumidor da REGRA 89"
+  else record_fail "lint-morte: (a)" "o consumidor morreu com baseline vazio (a morte da porta publica): ${o}"; fi
+
+  o="$(_lm_run '# so comentario
+# e linha em branco
+
+' || true)"
+  if grep -q 'SOBREVIVEU' <<< "${o}"; then
+    record_pass "lint-morte: (b) baseline SO com comentarios tambem nao mata"
+  else record_fail "lint-morte: (b)" "comentario-puro mata igual (mesma classe, grep -v devolve 1): ${o}"; fi
+
+  # (c) o caminho de TOLERANCIA continua funcionando — a cura nao pode virar fail-open
+  _lm_stub "printf 'SEM-AUFHEBUNG\\tdocs/x/r.kg.yaml\\n'; printf 'TOTAL\\t1\\n'"
+  o="$(_lm_run 'docs/x/r.kg.yaml
+' || true)"
+  if grep -q 'SOBREVIVEU' <<< "${o}" && ! grep -q 'V\[HARD\]' <<< "${o}"; then
+    record_pass "lint-morte: (c) entrada NO baseline segue tolerada (a cura nao virou fail-open)"
+  else record_fail "lint-morte: (c)" "tolerancia quebrada: ${o}"; fi
+
+  # (d) entrada FORA do baseline segue HARD — a catraca continua morde
+  o="$(_lm_run '' || true)"
+  if grep -q 'V\[HARD\]' <<< "${o}"; then
+    record_pass "lint-morte: (d) entrada FORA do baseline segue HARD (catraca intacta)"
+  else record_fail "lint-morte: (d)" "a catraca deixou de morder: ${o}"; fi
+
+  # (e) O ROTULO: morte antes do sumario e `NAO PUDE JULGAR` (2), nunca veredito (0|1)
+  o="$(bash -c '
+    set -euo pipefail
+    _LINT_SUMMARY_REACHED=0
+    source <(sed -n "/^_lint_on_exit()/,/^}$/p" "'"${lint}"'")
+    # o rc E o objeto do caso: sem colher com `|| _rc=$?` o `set -e` mata o pai ANTES do echo e o
+    # caso reprova com o mecanismo funcionando (foi o que aconteceu na 1a redacao deste caso)
+    _rc=0; ( _lint_on_exit 1 ) || _rc=$?; echo "rc=${_rc}"
+  ' 2>&1 || true)"
+  if grep -q 'rc=2' <<< "${o}" && grep -q 'MORREU' <<< "${o}"; then
+    record_pass "lint-morte: (e) morte antes do sumario sai 2 e se ANUNCIA"
+  else record_fail "lint-morte: (e)" "morte calada ou rotulada como veredito: ${o}"; fi
+
+  # (f) O MECANISMO, MEDIDO NO COMPORTAMENTO — nao pela presenca das linhas.
+  # A 1a redacao deste caso asseria `grep -q '^_LINT_SUMMARY_REACHED=1'` + `grep -q "^trap"`, e um
+  # refutador independente derrubou em 2026-09-24: MOVER o flag para o topo do arquivo continua
+  # casando a ancora, o trap vira no-op, toda morte precoce volta a sair com rc cru e sem anuncio — e
+  # os 6 casos desta familia ficavam VERDES. Cobertura declarada sem cobertura real e pior que a
+  # ausencia do caso, e era exatamente a tese do cabecalho do lint sendo violada pelo teste dela.
+  # Agora: copia o lint para um sandbox, injeta uma morte ANTES do sumario e exige rc=2 + anuncio.
+  # Se o controle nao chega ao sumario, o caso NAO conclui (⊘), nunca aprova.
+  local lsb; lsb="$(mktemp -d)"
+  mkdir -p "${lsb}/.claude/validation"
+  cp "${lint}" "${lsb}/.claude/validation/lint-artifacts.sh"
+  local ctl; ctl="$(bash "${lsb}/.claude/validation/lint-artifacts.sh" 2>&1 || true)"
+  if ! grep -q '=== Sumário ===' <<< "${ctl}"; then
+    record_skip "lint-morte: (f) o controle no sandbox nao chegou ao sumario — NAO PUDE medir o mecanismo"
+  else
+    # morte sintetica imediatamente ANTES da linha que arma o flag: se o flag estiver no lugar certo,
+    # o trap precisa anunciar; se alguem o mover para o topo, esta morte sai calada e o caso reprova.
+    sed -i '/^_LINT_SUMMARY_REACHED=1/i grep -q ZZZ_MORTE_SINTETICA_DA_BANCADA /dev/null' \
+      "${lsb}/.claude/validation/lint-artifacts.sh"
+    local mrc=0 mout
+    mout="$(bash "${lsb}/.claude/validation/lint-artifacts.sh" 2>&1)" || mrc=$?
+    if [ "${mrc}" -eq 2 ] && grep -q 'MORREU' <<< "${mout}"; then
+      record_pass "lint-morte: (f) morte ANTES do sumario sai 2 e se anuncia — medido no comportamento"
+    else
+      record_fail "lint-morte: (f)" "o mecanismo nao mordeu: rc=${mrc} (esperado 2), MORREU=$(grep -c 'MORREU' <<< "${mout}") (esperado >=1) — se o flag foi movido para o topo, o trap virou no-op"
+    fi
+  fi
+  rm -rf "${lsb}"
+
+  rm -rf "$d"
+}
+_family run_lint_silent_death_selftests
+
+# ---------------------------------------------------------------------------
+# FORMA do manifest.tsv — o leitor de bash ve o que o awk ve?
+# ---------------------------------------------------------------------------
+# POR QUE EXISTE (refutador independente, 2026-09-24): a 6a coluna `inject` nasceu inalcancavel para
+# linhas de campo vazio, porque `IFS=$'\t'` COLAPSA TABs consecutivos e `awk -F'\t'` nao. Nenhum
+# script conferia a forma do manifesto — `harness-inventory.sh` conta LINHAS, nao colunas. Esta
+# familia compara, linha por linha, o que o leitor de producao le contra o que o awk le: qualquer
+# divergencia e campo caindo na coluna errada, que e sempre silencioso.
+run_manifest_shape_selftests() {
+  local mf="${REPO_ROOT}/.claude/validation/fixtures/manifest.tsv"
+  if [ ! -f "${mf}" ]; then record_skip "manifest-shape: manifesto ausente (SUT nao exercido)"; return; fi
+  local mismatches=0 rows=0 nf_bad=0
+  while IFS=$'\t' read -r kind fixture target verdict keyword inject; do
+    case "${kind:-}" in ''|'#'*|kind) continue ;; esac
+    rows=$(( rows + 1 ))
+    # o que o awk ve na MESMA linha (sem colapso), casando pela fixture
+    local awk_inject awk_nf
+    awk_inject="$(awk -F'\t' -v f="${fixture}" '$2==f {print ($6=="-"?"":$6); exit}' "${mf}")"
+    awk_nf="$(awk -F'\t' -v f="${fixture}" '$2==f {print NF; exit}' "${mf}")"
+    [ "${inject:-}" = "${awk_inject}" ] || { mismatches=$(( mismatches + 1 )); \
+      record_fail "manifest-shape: ${fixture}" "o leitor de producao le inject='${inject:-}' e o awk le '${awk_inject}' — campo caiu na coluna errada (colapso de TAB)"; }
+    case "${awk_nf}" in 4|5|6) ;; *) nf_bad=$(( nf_bad + 1 ));
+      record_fail "manifest-shape: ${fixture}" "NF=${awk_nf} fora de 4..6 — coluna a mais ou a menos" ;; esac
+  done < "${mf}"
+  if [ "${rows}" -eq 0 ]; then
+    record_fail "manifest-shape" "ZERO rows lidas do manifesto — o leitor nao enxergou nada (nao e 'tudo ok')"
+  elif [ "${mismatches}" -eq 0 ] && [ "${nf_bad}" -eq 0 ]; then
+    record_pass "manifest-shape: ${rows} linha(s) — leitor de producao e awk concordam em TODA coluna"
+  fi
+}
+_family run_manifest_shape_selftests
 
 
 

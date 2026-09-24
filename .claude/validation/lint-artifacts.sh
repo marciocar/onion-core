@@ -2319,11 +2319,32 @@ check_kg_read_index_sync() {
     violation "HARD" "docs/onion/kg-read-index.tsv" "REGRA 84 (Índice de leitura do KG em sincronia com os traces): índice AUSENTE — o hook da perna de leitura fica calado para o corpus inteiro. Gere: bash .claude/validation/kg-trace-resolve.sh . --emit-index > docs/onion/kg-read-index.tsv"
     return
   fi
-  local new_index; new_index="$(bash "${gen}" "${REPO_ROOT}" --emit-index 2>/dev/null || true)"
+  # ⚠️ O `2>/dev/null || true` DA 1a VERSAO COLAPSAVA DOIS MUNDOS, e o preco foi medido em 2026-09-24
+  # adotando um repo novo: o gate do adotante BARROU O PRIMEIRO COMMIT dele por este HARD. A causa nao
+  # era defeito nenhum do adotante — o corpus dele tem UM grafo (a semente da adocao) cujo `trace:` e
+  # PROSA, e prosa e LEGITIMA pelo contrato do proprio resolvedor (kg-trace-resolve.sh:33-34: "nao
+  # parece caminho → nome solto, chave de config, comando, prosa. `trace:` aceita mais que arquivo").
+  # Indice vazio ali e o estado NORMAL do dia 1, nao falha de ambiente.
+  # E o gerador JA DISTINGUE os dois casos: sai 3 com "indice VAZIO (parser leu 0 nos com trace
+  # resolvivel)" quando o corpus legitimamente nao tem trace de arquivo, e outro rc quando quebra.
+  # Quem nao lia era esta guarda — ela jogava fora o rc E o stderr e chamava tudo de gerador quebrado.
+  # E o modo-de-falha que a propria doutrina de adocao nomeia: gate que nasce reprovando o adotante no
+  # dia 1 acaba DESLIGADO, e ai nenhuma regra vale.
+  local new_index gen_err gen_rc=0
+  gen_err="$(mktemp)"
+  new_index="$(bash "${gen}" "${REPO_ROOT}" --emit-index 2>"${gen_err}")" || gen_rc=$?
   if [ -z "${new_index}" ]; then
-    violation "HARD" "docs/onion/kg-read-index.tsv" "REGRA 84 (Índice de leitura do KG em sincronia com os traces): o GERADOR devolveu vazio — não regenere por cima (sobrescreveria o índice bom). Falha de ambiente ou parser: rode o gerador à mão e leia o stderr."
+    # `grep -F` com termo ASCII: o hook roda em locale C e acento nao casa classe multibyte (licao
+    # `bancada-mede-no-locale-do-hook`). "VAZIO" e "resolv" bastam e sao ASCII.
+    if [ "${gen_rc}" -eq 3 ] && grep -qF 'VAZIO' "${gen_err}" && grep -qF 'resolv' "${gen_err}"; then
+      violation "SOFT" "docs/onion/kg-read-index.tsv" "REGRA 84 (Índice de leitura do KG em sincronia com os traces): [kg-read-index/CORPUS-SEM-TRACE-DE-ARQUIVO] o corpus nao tem NENHUM nó cujo \`trace:\` resolva para arquivo — índice vazio LEGÍTIMO (é o dia 1 de todo adotante: a semente da adoção tem trace em prosa, e prosa é válida). A perna de leitura nada tem a indexar ainda; ela liga sozinha quando o primeiro nó com trace de ARQUIVO nascer. Nada a corrigir."
+    else
+      violation "HARD" "docs/onion/kg-read-index.tsv" "REGRA 84 (Índice de leitura do KG em sincronia com os traces): o gerador devolveu vazio SEM declarar corpus-sem-trace (rc=${gen_rc}) — isto é falha de ambiente ou parser, não estado legítimo. NÃO regenere por cima (sobrescreveria o índice bom). stderr: $(head -c 200 "${gen_err}" | tr '\n' ' ')"
+    fi
+    rm -f "${gen_err}"
     return
   fi
+  rm -f "${gen_err}"
   if ! printf '%s\n' "${new_index}" | LC_ALL=C diff -q - "${idx}" >/dev/null 2>&1; then
     violation "HARD" "docs/onion/kg-read-index.tsv" "REGRA 84 (Índice de leitura do KG em sincronia com os traces): índice DEFASADO vs os \`trace:\` do corpus — o hook de leitura está cego para os nós que faltam. Regenere: bash .claude/validation/kg-trace-resolve.sh . --emit-index > docs/onion/kg-read-index.tsv"
   fi
@@ -2356,8 +2377,24 @@ check_door_staleness() {
   local line
   while IFS= read -r line; do
     case "${line}" in
-      *ANDOU-PARA-TRAS*|*SEM-BASELINE*|*PIN-DESCONHECIDO*)
-        violation "HARD" "docs/evolution/federation/members.yaml" "REGRA 85 (Porta pública espelha o core, com catraca): ${line} — re-materialize (bash ops/materialize-door.sh <clone>) e atualize o pin no registro, ou baixe o teto em door-staleness-baseline.txt se a porta foi publicada. Porta defasada MENTE sobre o core."
+      # ⚠️ ANDOU-PARA-TRAS DEIXOU DE SER HARD EM 2026-09-24, POR DECISÃO DO MAESTRO, e a razão está
+      # medida no próprio `door-staleness-baseline.txt`: a cura que esta linha cobra — re-materializar
+      # a porta — SÓ EXISTE DEPOIS DO MERGE, porque materializar do HEAD da branch publicaria trabalho
+      # não-mergeado num repo PÚBLICO. Resultado, repetido 5+ vezes no registro deste arquivo: todo PR
+      # nascia com HARD que NENHUMA ação dentro dele podia limpar, e `lint-onion-artifacts` não é
+      # dispensável no `pr-merge-verified.sh` — por desenho. Uma leva chegou a pagar DUAS
+      # materializações (a 18a publicou lint defeituoso só para destravar o merge; a 19a levou a cura).
+      # A frase que fecha o argumento já estava escrita DENTRO do `door-staleness-check.sh`: "uma guarda
+      # que só pode ser satisfeita depois do merge não é gate de pré-merge". Faltava tirar a conclusão
+      # sobre o MOMENTO da cobrança, e é o que a decisão fez (nó D_ONDE_COBRAR_A_DEFASAGEM_DA_PORTA).
+      # A cobrança mudou de LUGAR, não desapareceu: `onion-door-staleness.yml` roda no push para main
+      # — o único instante em que re-materializar é possível — e falha lá, alto, com a porta nomeada.
+      # SEM-BASELINE e PIN-DESCONHECIDO seguem HARD: não são questão de momento, são registro quebrado.
+      *ANDOU-PARA-TRAS*)
+        violation "SOFT" "docs/evolution/federation/members.yaml" "REGRA 85 (Porta pública espelha o core, com catraca): [porta/DEFASADA-COBRADA-POS-MERGE] ${line} — re-materialize (bash ops/materialize-door.sh <clone>), publique e avance o pin. NÃO bloqueia este PR de propósito: a cura só existe depois do merge, e a cobrança bloqueante mora no workflow \`onion-door-staleness\` (push para main). Porta defasada MENTE sobre o core — mas o PR não é o lugar de consertar."
+        ;;
+      *SEM-BASELINE*|*PIN-DESCONHECIDO*)
+        violation "HARD" "docs/evolution/federation/members.yaml" "REGRA 85 (Porta pública espelha o core, com catraca): ${line} — isto NÃO é questão de momento: é registro quebrado (pin que não existe na história, ou porta sem teto declarado). Corrija no members.yaml / door-staleness-baseline.txt antes do merge."
         ;;
       ERRO*) violation "HARD" ".claude/validation/door-staleness-check.sh" "REGRA 85 (Porta pública espelha o core, com catraca): a guarda não pôde julgar — ${line}" ;;
     esac

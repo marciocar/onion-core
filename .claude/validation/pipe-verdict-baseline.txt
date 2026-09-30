@@ -12,6 +12,10 @@
 .claude/hooks/pretooluse-merge-gate.sh	3
 .claude/hooks/pretooluse-protect-main.sh	3
 .claude/hooks/rule-title-in-prose.sh	2
+.claude/utils/adopt/claude-md-fuse.sh	2
+.claude/utils/adopt/merge-prettierignore.sh	1
+.claude/utils/adopt/vendor-branch.sh	1
+.claude/utils/federation-transport/a2a-verify.sh	2
 .claude/validation/aside-router.sh	12
 .claude/validation/consumed-mode-check.sh	3
 .claude/validation/diary-index.sh	1

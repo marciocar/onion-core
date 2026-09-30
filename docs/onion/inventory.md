@@ -8,16 +8,16 @@
 
 | Recurso | Quantidade |
 |---------|-----------:|
-| Comandos invocáveis | **90** |
+| Comandos invocáveis | **110** |
 | Agentes | **51** |
-| Skills | **12** |
+| Skills | **13** |
 | Knowledge Bases | **107** |
 
 ## Comandos por categoria (10 categorias + root)
 
 | Categoria | Comandos |
 |-----------|---------:|
-| `meta/` | 23 |
+| `meta/` | 43 |
 | `product/` | 21 |
 | `engineer/` | 12 |
 | `docs/` | 11 |
@@ -28,7 +28,7 @@
 | `quick/` | 1 |
 | `development/` | 1 |
 | _root_ (`onion`, `warm-up`, `catch-up`) | 3 |
-| **Total** | **90** |
+| **Total** | **110** |
 
 ## Agentes por categoria (9 categorias)
 

@@ -1737,6 +1737,42 @@ run_harness_inventory_selftests() {
     record_pass "harness-inventory: (f) (MUT) o lint ORIGINAL acusa o drift e o MUTADO CALA — a comparação de diff é o dente (mutante EXECUTADO, ${n_mut} sítios mutados)"
   else record_fail "harness-inventory: (f) (MUT)" "sítios mutados=${n_mut} (esperava >=2); original acusou=${hit_orig} (esperava >=1); mutante acusou=${hit_mut} (esperava 0) — a guarda não é load-bearing OU a âncora caducou"; fi
   rm -rf "${mut}" "${sb2}"
+
+  # ── (z1)(z2) A GUARDA QUE GRITAVA CINCO VEZES E NÃO PARAVA NADA ────────────────────────────
+  # Medido 2026-09-27: o `_die` do `_tracked` vivia no ramo `else`, e `_tracked` é chamado SEMPRE
+  # dentro de `$( )`. `_die` num subshell mata o SUBSHELL, não o script — a mensagem "Recusa" saía
+  # CINCO vezes no stderr, o `grep -c .` devolvia 0, o `|| true` engolia o rc, e o inventário
+  # publicava CINCO contadores zerados com **rc=0**, declarando na própria tabela o `git ls-files`
+  # que produziu o zero. Guarda que declara recusar e não alcança o programa de onde é chamada.
+  # Origem: sinal de um adotante greenfield (2026-09-08) que commitou SSOT de superfície inexistente.
+  local _hi_sb _hi_out _hi_rc
+  # (z1) SEM índice git ⇒ recusa ANTES de contar
+  _hi_sb="$(mktemp -d)"; git -C "${REPO_ROOT}" archive HEAD | tar -x -C "${_hi_sb}" 2>/dev/null
+  cp "${gen}" "${_hi_sb}/.claude/validation/" 2>/dev/null
+  if _hi_out="$( cd "${_hi_sb}" && bash .claude/validation/harness-inventory.sh 2>&1 )"; then _hi_rc=0; else _hi_rc=$?; fi
+  # ⚠️ A asserção passa pelo mesmo escrutínio do SUT: a 1ª redação tinha uma 3ª condição
+  #    ("nenhuma linha de tabela com **0**") que é REDUNDANTE — ele aborta antes de imprimir
+  #    tabela alguma — e ela reprovou um SUT correto. Asserção errada parece defeito ([[mutant-anchor-is-a-defect-candidate]]).
+  #    E o padrão é À PROVA DE LOCALE: a bancada roda sob `LC_ALL=C`, onde `í` são DOIS bytes e
+  #    `sem .ndice` (um curinga) NÃO casa. Casar só o trecho ASCII é o que sobrevive aos dois
+  #    locales ([[bancada-mede-no-locale-do-hook]]).
+  if [ "${_hi_rc}" -ne 0 ] && grep -qiE 'ndice git' <<< "${_hi_out}"; then
+    record_pass "harness-inventory: (z1) sem índice git ⇒ recusa ANTES de contar (nenhuma tabela zerada)"
+  else record_fail "harness-inventory: (z1) zero virou resultado" "rc=${_hi_rc} out=${_hi_out:0:220}"; fi
+  rm -rf "${_hi_sb}"
+
+  # (z2) git PRESENTE mas tudo UNTRACKED ⇒ CONTRADIÇÃO nomeada. É o cenário exato do adotante:
+  #      arquivo em disco + contagem rastreada zero = projeção afirmaria superfície que não existe.
+  _hi_sb="$(mktemp -d)"; git -C "${REPO_ROOT}" archive HEAD | tar -x -C "${_hi_sb}" 2>/dev/null
+  cp "${gen}" "${_hi_sb}/.claude/validation/" 2>/dev/null
+  git -C "${_hi_sb}" init -q 2>/dev/null
+  git -C "${_hi_sb}" -c user.email=t@t -c user.name=t commit -q --allow-empty -m vazio 2>/dev/null || true
+  if _hi_out="$( cd "${_hi_sb}" && bash .claude/validation/harness-inventory.sh 2>&1 )"; then _hi_rc=0; else _hi_rc=$?; fi
+  if [ "${_hi_rc}" -ne 0 ] && grep -qiE 'CONTRADI' <<< "${_hi_out}"; then
+    record_pass "harness-inventory: (z2) tudo untracked ⇒ CONTRADIÇÃO nomeada (o sinal do greenfield)"
+  else record_fail "harness-inventory: (z2) publicaria superfície inexistente" "rc=${_hi_rc} out=${_hi_out:0:220}"; fi
+  rm -rf "${_hi_sb}"
+
 }
 
 # Modo rules-registry — REGRA 39. O gerador projeta os docstrings '# REGRA N — …' de
@@ -13727,8 +13763,11 @@ run_role_cut_selftests() {
   #     citado 32x nas mensagens, `/meta:kg-freshness` 27x).
   #
   #     EXCEÇÕES, e cada uma tem razão nomeada: são comandos citados por guardas que NÃO rodam num
-  #     alvo — autoria do framework (`adopt`, `create-*`, `evolve`) e federação cross-empresa
+  #     alvo — autoria do framework (`adopt`, `create-*`, `evolve`, `forge`) e federação cross-empresa
   #     (`federation-*`, `co-announce`, `co-deliver`, este último já no conjunto `downstream`).
+  #     `forge` entrou em 2026-09-29: é Camada 1 (autoria do framework), declarado core-only no
+  #     próprio `forge.md`, e o `forge-census.sh` o cita numa linha de comentário. O caso pegou na
+  #     primeira corrida depois de o comando nascer — mecanismo funcionando, não burocracia.
   if [ -f "${_resolver}" ]; then
     local _full; _full="$(bash "${_resolver}" standalone --tools 2>/dev/null)"
     local _citados _c _orfaos=""
@@ -13736,7 +13775,7 @@ run_role_cut_selftests() {
     while IFS= read -r _c; do
       [ -n "${_c}" ] || continue
       case "${_c}" in
-        adopt|evolve|create-*|federation-*|co-announce|co-deliver) continue ;;  # fábrica/federação
+        adopt|evolve|forge|create-*|federation-*|co-announce|co-deliver) continue ;;  # fábrica/federação
         nao|federation-) continue ;;                                            # falsos positivos do grep
       esac
       [ -f "${REPO_ROOT}/.claude/commands/meta/${_c}.md" ] || continue          # comando que não existe
@@ -17754,6 +17793,36 @@ run_door_selftests() {
   else record_fail "door: (g)" "o core falso não pôde ser montado (clone raso + cópia da árvore)"; fi
   rm -rf "${d6}" "${fake}"
 
+  # (h) DESTINO ANINHADO EM OUTRO REPO ⇒ ABORTA, e sem tocar o índice do hospedeiro.
+  #     Irmão obrigatório da cura de (f): para que as projeções nasçam certas, o materializador
+  #     passou a stajar o destino (`git add -A`) antes de regenerar. Num destino DENTRO de outro repo
+  #     o `rev-parse` resolve para o índice de FORA, e aquele staging levaria a porta inteira para o
+  #     índice do hospedeiro — efeito silencioso e caro. O caso mede as duas metades: rc≠0 com a
+  #     causa NOMEADA, e o índice do core inalterado depois da tentativa.
+  local d7 _out_h _st_before _st_after
+  # ⚠️ O DESTINO NÃO PODE MORAR EM `.claude/worktrees/`, e a passada adversarial de 2026-09-28 mediu
+  #     por quê: aquele diretório não é RASTREADO e não existe num checkout fresco. Sem o pai, a
+  #     pré-condição nova do materializador (`o diretório pai não existe`) dispara PRIMEIRO, com outra
+  #     mensagem — o grep abaixo não casa e o caso acusa a guarda de não ter recusado quando ela
+  #     recusou. Verde aqui, vermelho no CI, que é a assinatura de bancada medindo AMBIENTE. Pior: o
+  #     mesmo diretório está ignorado via `.git/info/exclude` (arquivo não versionado), então a 2ª
+  #     metade — "o índice do hospedeiro fica intacto" — era VÁCUA aqui e inalcançável lá. O pai tem
+  #     de existir SEMPRE e não ser ignorado: a raiz do repo serve, e é o que os outros casos da
+  #     família já fazem com `mktemp`.
+  d7="${REPO_ROOT}/__bancada-porta-aninhada-$$"
+  rm -rf "${d7}"
+  _st_before="$(git -C "${REPO_ROOT}" status --porcelain 2>/dev/null | sort)"
+  _out_h="$(bash "${REPO_ROOT}/ops/materialize-door.sh" "${d7}" --role standalone --from HEAD 2>&1 || true)"
+  _st_after="$(git -C "${REPO_ROOT}" status --porcelain 2>/dev/null | sort)"
+  if ! grep -q 'está DENTRO do repo' <<< "${_out_h}"; then
+    record_fail "door: (h)" "destino aninhado NÃO foi recusado — o staging iria para o índice do hospedeiro: $(_emit "${_out_h}" | tail -3 | head -c 200)"
+  elif [ "${_st_before}" != "${_st_after}" ]; then
+    record_fail "door: (h)" "recusou, mas o índice/árvore do core MUDOU na tentativa (a recusa veio tarde demais)"
+  else
+    record_pass "door: (h) destino aninhado em outro repo ⇒ ABORTA, e o índice do hospedeiro fica intacto"
+  fi
+  rm -rf "${d7}"
+
   rm -rf "${d4}" "${d3}" "${sb2}"
 }
 
@@ -18314,12 +18383,18 @@ run_role_scope_selftests() {
   cp "${vm}" "${sb3}/.claude/utils/adopt/" 2>/dev/null || true
   {
     sed -n '/^_ROLE_OF_THIS_REPO=""/,/^}/p'      "${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
+    # ⚠️ `_expand_braces` É DEPENDÊNCIA NOVA de `_rule_glob_matches` (2026-09-29) e este harness a
+    #    ignorava: a bancada ABORTOU com `exit 127 · _expand_braces: command not found`. Classe
+    #    [[fail-closed-exposes-incomplete-harness]] — a cura é no HARNESS, nunca afrouxar a guarda.
+    #    A lista de símbolos exigidos abaixo também a nomeia, senão a ausência volta como veredito
+    #    silencioso em vez de skip declarado.
+    sed -n '/^_expand_braces()/,/^}/p'          "${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
     sed -n '/^_glob_literal_prefix()/,/^}/p'    "${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
     sed -n '/^_traveling_surface()/,/^}/p'   "${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
     sed -n '/^_rule_without_object_for_role()/,/^}/p' "${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
     sed -n '/^_rule_glob_matches()/,/^}/p'      "${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
   } > "${sb3}/pred2.sh"
-  if ! _rs_syms_ok "${sb3}/pred2.sh" _rule_without_object_for_role _traveling_surface _glob_literal_prefix _rule_glob_matches; then
+  if ! _rs_syms_ok "${sb3}/pred2.sh" _rule_without_object_for_role _traveling_surface _expand_braces _glob_literal_prefix _rule_glob_matches; then
     record_skip "role-scope: (d)(e)(f)(g) NAO exercidos — o predicado nao montou"
     rm -rf "${sb3}"; return 0
   fi
@@ -18329,7 +18404,7 @@ run_role_scope_selftests() {
     else rm -f "${sb3}/.claude/.onion-version"; fi
     REPO_ROOT="${sb3}" CLAUDE_DIR="${sb3}/.claude" bash -c '
       source "'"${sb3}"'/pred2.sh"
-      for _fn in _rule_without_object_for_role _traveling_surface _glob_literal_prefix _rule_glob_matches; do
+      for _fn in _rule_without_object_for_role _traveling_surface _expand_braces _glob_literal_prefix _rule_glob_matches; do
         declare -F "${_fn}" >/dev/null 2>&1 || { echo "SEM-FUNCAO:${_fn}"; exit 0; }
       done
       '"$2"'' 2>&1
@@ -19081,6 +19156,221 @@ _family run_version_drift_selftests
 _family run_premodelswitch_guard_selftests
 _family run_research_lens_selftests
 _family run_command_role_parity_selftests
+# ── FORJA: o censo das 7 peças mede por REFERÊNCIA, e recusa quando não pode medir ───────────
+# Os casos (b)(c)(d) são os MUTANTES dos três erros que eu cometi levantando este censo à mão em
+# 2026-09-28 — prefixo duplicado, radical vs nome cheio, e padrão que não cobre a redação real.
+# Todos tinham a mesma forma: CONSTRUIR o caminho da peça a partir do nome do candidato. Se algum
+# deles voltar, o censo devolve número errado com cara de medição, que é o pior formato possível.
+run_forge_selftests() {
+  local sut="${REPO_ROOT}/.claude/validation/forge-census.sh"
+  if [ ! -f "${sut}" ]; then record_fail "forge" "SUT ausente: ${sut}"; return; fi
+  local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
+  git -C "${d}" init -q -b main 2>/dev/null || { record_fail "forge" "git init falhou na sandbox"; return; }
+  mkdir -p "${d}/.claude/skills/onion-exemplo" "${d}/.claude/commands/common/prompts" \
+           "${d}/.claude/commands/meta" "${d}/.claude/rules" "${d}/.claude/workflows"
+  mkdir -p "${d}/.claude/validation"
+  # ⚠️ A SANDBOX PRECISA DO ARQUIVO QUE O SUT LÊ. O predicado da peça 7 confere que a família
+  #    CITADA existe de fato no runner do alvo (citação sem existência era o furo do fantasma), então
+  #    sem um `lint-selftest.sh` aqui a peça 7 seria sempre ausente — e eu perderia meia hora
+  #    achando defeito na guarda. bancada-espelha-o-runner: o harness entrega o que o motor lê.
+  printf 'run_exemplo_selftests() {\n  :\n}\n' > "${d}/.claude/validation/lint-selftest.sh"
+
+  _fg() { git -C "${d}" add -A >/dev/null 2>&1
+          if _fg_out="$(bash "${sut}" "${d}" --tsv 2>&1)"; then _fg_rc=0; else _fg_rc=$?; fi }
+  _fg_pecas() { printf '%s\n' "${_fg_out}" | awk -F'\t' -v c="$1" '$2==c{print $1; exit}'; }
+
+  # (a) superfície que CITA as 6 peças ⇒ 7/7. O nome do diretório (`onion-exemplo`) não bate com o
+  #     radical dos arquivos (`exemplo-*`), que é exatamente o 2o erro de 2026-09-28: se o censo
+  #     construísse o nome, daria menos que 7.
+  printf 'doutrina\n' > "${d}/.claude/commands/common/prompts/exemplo-doctrine.md"
+  printf 'lente\n'    > "${d}/.claude/rules/exemplo-lens.md"
+  printf 'wf\n'       > "${d}/.claude/workflows/exemplo.js"
+  cat > "${d}/.claude/skills/onion-exemplo/SKILL.md" <<'SK'
+# exemplo
+**Hoje:** !`date +%F`   <- diretiva de injecao, o que o harness EXECUTA na carga
+Doutrina: .claude/commands/common/prompts/exemplo-doctrine.md
+Workflow: .claude/workflows/exemplo.js
+Destino: write(KG) + kg-radar exit 0
+Lente: .claude/rules/exemplo-lens.md
+Bancada: run_exemplo_selftests
+SK
+  _fg
+  if [ "$(_fg_pecas onion-exemplo)" = "7" ]; then
+    record_pass "forge: (a) superfície que cita as 6 peças ⇒ 7/7, mesmo com nome do dir ≠ radical dos arquivos"
+  else
+    # ⚠️ ASSERÇÃO QUE NOMEIA A PEÇA, não só o total — achado 11 da passada adversarial: seis mutantes
+    #    distintos colapsavam no mesmo "esperado 7/7, veio 6" e o vermelho não dizia qual predicado
+    #    quebrou. Diagnóstico é parte do caso, não luxo.
+    local _l _faltou=""
+    _l="$(printf '%s\n' "${_fg_out}" | awk -F'\t' '$2=="onion-exemplo"{print}')"
+    local _i=0
+    for _nome in doutrina contexto workflow destino lente bancada; do
+      _i=$((_i + 1))
+      [ "$(printf '%s' "${_l}" | cut -f$((_i + 2)))" = "1" ] || _faltou="${_faltou} ${_nome}"
+    done
+    record_fail "forge: (a)" "esperado 7/7, veio $(_fg_pecas onion-exemplo) — peça(s) não detectada(s):${_faltou:- nenhuma (o total é que está errado)}"
+  fi
+
+  # (b) MUTANTE DO ERRO 1 — peça que EXISTE mas o artefato NÃO CITA conta como ausente.
+  #     É a cláusula 1 da doutrina, e é verdade operacional: a sessão também não a acharia.
+  mkdir -p "${d}/.claude/skills/onion-muda"
+  printf 'lente orfa\n' > "${d}/.claude/rules/muda-lens.md"
+  printf '# muda\nsó a superfície, não cita nada\n' > "${d}/.claude/skills/onion-muda/SKILL.md"
+  _fg
+  if [ "$(_fg_pecas onion-muda)" = "1" ]; then
+    record_pass "forge: (b) peça que existe e NÃO é citada conta como ausente (1/7) — cláusula 1"
+  else record_fail "forge: (b)" "esperado 1/7 p/ superfície muda, veio $(_fg_pecas onion-muda)"; fi
+
+  # (c) MUTANTE DO ERRO 3 — redação alternativa do destino ('radar exit 0' sem a palavra kg-radar),
+  #     que foi exatamente o que me fez contar a peça 5 do census como ausente.
+  mkdir -p "${d}/.claude/skills/onion-redacao"
+  printf '# redacao\nsela com radar exit 0 em todo grafo tocado\n' > "${d}/.claude/skills/onion-redacao/SKILL.md"
+  _fg
+  if [ "$(_fg_pecas onion-redacao)" = "2" ]; then
+    record_pass "forge: (c) 'radar exit 0' conta a peça 5 (a redação real do census, que meu grep perdeu)"
+  else record_fail "forge: (c)" "esperado 2/7, veio $(_fg_pecas onion-redacao)"; fi
+
+  # (d) sem índice git ⇒ rc=3 DECLARANDO. Censo é do conjunto RASTREADO; zero não é resultado.
+  local ng; ng="$(mktemp -d)"; mkdir -p "${ng}/.claude/commands/meta"
+  printf 'x\n' > "${ng}/.claude/commands/meta/x.md"
+  local og orc=0
+  if og="$(bash "${sut}" "${ng}" --tsv 2>&1)"; then orc=0; else orc=$?; fi
+  if [ "${orc}" = "3" ] && grep -q 'sem índice git' <<< "${og}"; then
+    record_pass "forge: (d) sem índice git ⇒ rc=3 DECLARANDO (nunca censo vazio)"
+  else record_fail "forge: (d)" "sem git não recusou (rc=${orc}): $(_emit "${og}" | head -c 200)"; fi
+  rm -rf "${ng}"
+
+  # (e) repo COM git mas ZERO candidato rastreado ⇒ rc=3, não censo de zero linhas.
+  local empty_repo; empty_repo="$(mktemp -d)"; git -C "${empty_repo}" init -q -b main 2>/dev/null
+  local ov vrc=0
+  if ov="$(bash "${sut}" "${empty_repo}" --tsv 2>&1)"; then vrc=0; else vrc=$?; fi
+  if [ "${vrc}" = "3" ] && grep -q 'nenhum candidato RASTREADO' <<< "${ov}"; then
+    record_pass "forge: (e) zero candidato rastreado ⇒ rc=3 DECLARANDO (censo vazio nunca passa por medição)"
+  else record_fail "forge: (e)" "repo sem candidato não recusou (rc=${vrc}): $(_emit "${ov}" | head -c 200)"; fi
+  rm -rf "${empty_repo}"
+
+  # (g) O CAMINHO DE PRODUÇÃO — `--markdown` é o que o forge.md manda rodar, e estava 100%
+  #     NÃO-TESTADO: a passada adversarial mostrou um mutante que fazia o cabeçalho MENTIR
+  #     (total e "N com 6+") com a família 6/6 verde. Classe testar-no-caminho-errado-e-nao-testar.
+  git -C "${d}" add -A >/dev/null 2>&1
+  local md; md="$(bash "${sut}" "${d}" --markdown 2>&1)"
+  local md_total md_ref tsv_total
+  md_total="$(printf '%s\n' "${md}" | sed -n 's/^# censo das 7 peças · \([0-9]\+\) candidato.*/\1/p')"
+  md_ref="$(printf '%s\n' "${md}" | sed -n 's/^# censo.*· \([0-9]\+\) com 6+.*/\1/p')"
+  tsv_total="$(bash "${sut}" "${d}" --tsv 2>/dev/null | tail -n +2 | grep -c . || true)"
+  # ⚠️ O "N com 6+" TAMBÉM é recomputado do TSV, não só checado como não-vazio: a 1a versão deste
+  #    caso fazia `[ -n "${md_ref}" ]` e o mutante que punha 99 ali passava VERDE — e é exatamente o
+  #    número que a doutrina e o nó do grafo citam. Guarda que aceita qualquer valor não guarda nada.
+  local tsv_ref
+  tsv_ref="$(bash "${sut}" "${d}" --tsv 2>/dev/null | tail -n +2 | awk -F'\t' '$1>=6' | grep -c . || true)"
+  if [ "${md_total}" = "${tsv_total}" ] && [ "${md_ref}" = "${tsv_ref}" ] \
+     && [ "$(printf '%s\n' "${md}" | grep -cE '^[0-9]/7 \| ')" -ge 1 ]; then
+    record_pass "forge: (g) --markdown (o caminho de produção) tem cabeçalho FIEL ao --tsv e tabela não-vazia"
+  else
+    record_fail "forge: (g)" "cabeçalho do markdown divergiu do tsv (total md=${md_total:-?} tsv=${tsv_total:-?} · 6+ md=${md_ref:-?} tsv=${tsv_ref:-?}) ou tabela vazia"
+  fi
+
+  # (h) A DESCOBERTA POR `commands/meta/` — metade do censo, e também não-testada: matar essa
+  #     varredura derrubava 44 de 57 candidatos no repo real sem a bancada mudar de cor.
+  mkdir -p "${d}/.claude/commands/meta"
+  printf '# so-comando\nnada citado\n' > "${d}/.claude/commands/meta/so-comando.md"
+  _fg
+  if [ "$(_fg_pecas so-comando)" = "1" ]; then
+    record_pass "forge: (h) candidato SÓ em commands/meta/ é descoberto (a outra metade da varredura)"
+  else record_fail "forge: (h)" "candidato de commands/meta/ não apareceu no censo"; fi
+
+  # (i) CITADO MAS INEXISTENTE ⇒ ausente. O furo que a passada adversarial abriu: um .md que só
+  #     citava caminhos fantasma pontuava 7/7, enquanto o docstring prometia medir PRESENÇA.
+  mkdir -p "${d}/.claude/skills/onion-fantasma"
+  cat > "${d}/.claude/skills/onion-fantasma/SKILL.md" <<'SKF'
+# fantasma
+Doutrina: .claude/commands/common/prompts/fantasma-doctrine.md
+Workflow: .claude/workflows/fantasma.js
+Lente: .claude/rules/fantasma-lens.md
+Bancada: run_fantasma_selftests
+SKF
+  _fg
+  if [ "$(_fg_pecas onion-fantasma)" = "1" ]; then
+    record_pass "forge: (i) peça CITADA mas inexistente no índice ⇒ ausente (o fantasma 7/7 morreu)"
+  else record_fail "forge: (i)" "fantasma pontuou $(_fg_pecas onion-fantasma)/7 — citação sem existência voltou a contar"; fi
+
+  # (f) a superfície NÃO-rastreada não entra no censo (o censo é do que viaja e do que o CI vê).
+  mkdir -p "${d}/.claude/skills/onion-untracked"
+  printf '# untracked\n' > "${d}/.claude/skills/onion-untracked/SKILL.md"
+  git -C "${d}" add -A >/dev/null 2>&1
+  git -C "${d}" rm --cached -q -- .claude/skills/onion-untracked/SKILL.md >/dev/null 2>&1
+  if _fg_out="$(bash "${sut}" "${d}" --tsv 2>&1)"; then :; fi
+  if ! grep -q 'onion-untracked' <<< "${_fg_out}"; then
+    record_pass "forge: (f) superfície untracked fica FORA do censo (mede o que viaja)"
+  else record_fail "forge: (f)" "candidato untracked entrou no censo"; fi
+}
+
+# ── PARIDADE ENTRE OS DOIS RAMOS de `_rule_glob_matches` (git × não-git) ──────────────────────
+# POR QUE EXISTE, e a razão é um erro MEU de 2026-09-29: o helper tem ramo git (pathspec) e ramo
+# NÃO-GIT (`find`), e eu curei a semântica de glob em UM só. A sandbox de fixtures é montada com
+# `tar` (sem `.git`), então a única cobertura ponta-a-ponta que havia exercitava justamente o ramo
+# intacto — as fixtures reprovaram e me mostraram. Sem esta família, a paridade depende de eu
+# escrever as duas semânticas nos dois lugares, que é disciplina, e disciplina não escala.
+# O ORÁCULO NÃO É UMA RÉGUA EXTERNA, é a CONCORDÂNCIA: os mesmos globs nos dois substratos têm de
+# dar o MESMO veredito. Assim o caso não caduca quando a semântica do harness mudar — ele só cobra
+# que as duas metades andem juntas.
+run_glob_branch_parity_selftests() {
+  local lint="${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
+  if [ ! -f "${lint}" ]; then record_fail "glob-parity" "SUT ausente: ${lint}"; return; fi
+  local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
+
+  # Árvore mínima IDÊNTICA nos dois substratos: um com git, um sem.
+  local g="${d}/comgit" n="${d}/semgit" sub
+  for sub in "${g}" "${n}"; do
+    mkdir -p "${sub}/docs/raso" "${sub}/docs/fundo/nivel" "${sub}/docs/alt-a" "${sub}/docs/alt-b"
+    printf 'x\n' > "${sub}/docs/raso/direto.md"          # casa em UM nível
+    printf 'x\n' > "${sub}/docs/fundo/nivel/longe.md"    # só casa descendo
+    printf 'x\n' > "${sub}/docs/alt-b/achado.md"         # só a 2a alternativa da brace existe
+  done
+  git -C "${g}" init -q -b main 2>/dev/null && git -C "${g}" add -A >/dev/null 2>&1 \
+    || { record_fail "glob-parity" "git init/add falhou na sandbox com git"; return; }
+
+  # ⚠️ Extrai os helpers do arquivo VIVO — não uma cópia que eu digite, que é como se mede o SUT e
+  #    não uma versão vizinha dele ([[bancada-espelha-o-runner]]).
+  local h="${d}/helpers.sh"
+  awk '/^_expand_braces\(\) \{/{f=1} f{print} f&&/^\}$/{exit}'       "${lint}" >  "${h}"
+  awk '/^_glob_literal_prefix\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "${lint}" >> "${h}"
+  awk '/^_rule_glob_matches\(\) \{/{f=1} f{print} f&&/^\}$/{exit}'   "${lint}" >> "${h}"
+  if ! grep -q '_rule_glob_matches' "${h}"; then
+    record_fail "glob-parity" "não consegui extrair os helpers do lint — o caso não pode julgar"; return
+  fi
+
+  _veredito() { # $1=REPO_ROOT a usar  $2=glob → imprime CASA|NAO
+    REPO_ROOT="$1" bash -c '. "'"${h}"'"; REPO_ROOT="'"$1"'"; if _rule_glob_matches "'"$2"'"; then echo CASA; else echo NAO; fi' 2>/dev/null
+  }
+
+  local globs=(
+    'docs/raso/*.md'            # vivo em um nível — os dois devem dizer CASA
+    'docs/fundo/*.md'           # MORTO pela semântica do harness (o `*` não cruza `/`)
+    'docs/fundo/**/*.md'        # vivo descendo
+    'docs/{alt-a,alt-b}/**'     # brace simples, viva pela 2a alternativa
+    'docs/{alt-a,{alt-b,alt-c}}/**'  # brace ANINHADA, viva
+    'docs/{alt-a/nada.md,alt-b/achado.md}'  # brace com `/` dentro, viva
+    'docs/{nada,tampouco}/**'   # brace MORTA: nenhuma alternativa casa
+    'docs/inexistente/*.md'     # morto trivial
+  )
+  local gl vg vn divergiu=0 detalhe=""
+  for gl in "${globs[@]}"; do
+    vg="$(_veredito "${g}" "${gl}")"; vn="$(_veredito "${n}" "${gl}")"
+    if [ -z "${vg}" ] || [ -z "${vn}" ]; then
+      record_fail "glob-parity" "veredito VAZIO para '${gl}' (git=${vg:-?} nao-git=${vn:-?}) — não julgo sem leitura"; return
+    fi
+    [ "${vg}" = "${vn}" ] || { divergiu=$((divergiu+1)); detalhe="${detalhe} ${gl}[git=${vg} nogit=${vn}]"; }
+  done
+  if [ "${divergiu}" -eq 0 ]; then
+    record_pass "glob-parity: (a) os ${#globs[@]} globs dão veredito IDÊNTICO no ramo git e no não-git"
+  else
+    record_fail "glob-parity: (a)" "${divergiu} glob(s) com veredito DIVERGENTE entre os ramos —${detalhe}. Curar um ramo só foi o erro de 2026-09-29; esta família existe para pegá-lo."
+  fi
+}
+
+_family run_forge_selftests
+_family run_glob_branch_parity_selftests
 _family run_review_cause_bands_selftests
 _family run_research_workflow_selftests
 

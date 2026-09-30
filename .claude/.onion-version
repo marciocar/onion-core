@@ -1,6 +1,6 @@
 # Carimbo de identidade da PORTA — escrito por ops/materialize-door.sh.
 # Sem ele o onion-version.sh cai no fallback 'source' e a porta se declara a FONTE.
-role: hub
+role: standalone
 adopted_from: onion-core
-onion_version: 7e977cd2f395
-materialized_at: 2026-09-27
+onion_version: cfbeec5bf946
+materialized_at: 2026-09-30

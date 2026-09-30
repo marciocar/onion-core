@@ -1095,8 +1095,45 @@ _rule_without_object_for_role() { # $1=globs (um por linha)
   return 0
 }
 
+# ── EXPANSOR DE BRACES, recursivo, usado pelos DOIS ramos de `_rule_glob_matches` ───────────
+# ⚠️ A 1a versão expandia UM nível e deixava de fora braces aninhadas e com `/` dentro, "para não
+#    virar fail-open". A sonda contra o binário (2026-09-29) REFUTOU a fronteira: o harness carrega
+#    `docs/x/{a,{b,d}}/**` E `docs/x/{a/f.md,b/c/g.md}` — as duas formas são legítimas, e reprová-las
+#    era FALSO POSITIVO em lente viva, o mesmo defeito que esta leva veio curar. Eu havia declarado um
+#    teto sem medir se havia algo atrás dele.
+#    E o fail-open que eu temia NÃO vem da recursão: vem de tratar "tem braces" como "casa". A fixture
+#    `bad-brace-dead` (alternativas em que NENHUMA casa ⇒ ACUSA) é o mutante que prova a diferença.
+# Imprime uma alternativa por linha; sem braces, imprime o próprio glob.
+_expand_braces() { # $1=glob
+  local g="$1" pre mid post depth i ch out rest
+  case "${g}" in *'{'*'}'*) : ;; *) printf '%s\n' "${g}"; return 0 ;; esac
+  # acha o PRIMEIRO `{` e o `}` que o FECHA, contando profundidade — é o que torna o aninhamento certo
+  pre="${g%%\{*}"; rest="${g#*\{}"; depth=1; mid=""; post=""
+  for (( i=0; i<${#rest}; i++ )); do
+    ch="${rest:i:1}"
+    case "${ch}" in
+      '{') depth=$((depth+1)) ;;
+      '}') depth=$((depth-1)); [ "${depth}" -eq 0 ] && { post="${rest:i+1}"; break; } ;;
+    esac
+    mid="${mid}${ch}"
+  done
+  [ "${depth}" -eq 0 ] || { printf '%s\n' "${g}"; return 0; }   # brace não fechada: literal, não chuta
+  # divide `mid` nas vírgulas de NÍVEL ZERO (vírgula dentro de brace aninhada pertence a ela)
+  depth=0; out=""
+  for (( i=0; i<${#mid}; i++ )); do
+    ch="${mid:i:1}"
+    case "${ch}" in
+      '{') depth=$((depth+1)); out="${out}${ch}" ;;
+      '}') depth=$((depth-1)); out="${out}${ch}" ;;
+      ',') if [ "${depth}" -eq 0 ]; then _expand_braces "${pre}${out}${post}"; out=""; else out="${out}${ch}"; fi ;;
+      *)   out="${out}${ch}" ;;
+    esac
+  done
+  _expand_braces "${pre}${out}${post}"
+}
+
 _rule_glob_matches() { # $1=glob
-  local g="$1" pat _ls
+  local g="$1" pat _ls _depth
   if git -C "${REPO_ROOT}" rev-parse --git-dir >/dev/null 2>&1; then
     # ⚠️ SEM PIPE, e a razão é um HARD ESPÚRIO que só o CI produziu (2026-09-14, PR #827):
     # a forma anterior era `git ls-files -- "$g" | grep -q .`. Sob `set -euo pipefail` (l.74) isso
@@ -1108,11 +1145,31 @@ _rule_glob_matches() { # $1=glob
     # carga, não. É a classe [[pipefail-epipe-early-closer-class]], e o modo de falha é o pior
     # possível: verde no dev, vermelho no CI, sobre um arquivo que ninguém tocou.
     # Capturar em variável não tem leitor que feche cedo — 10 KB de caminho é barato.
-    _ls="$(git -C "${REPO_ROOT}" ls-files -- "${g}")" || _ls=""
-    [ -n "${_ls}" ] && return 0
-    # o harness escreve '**/x'; o pathspec do git resolve o mesmo com o sufixo puro
-    _ls="$(git -C "${REPO_ROOT}" ls-files -- "${g#\*\*/}")" || _ls=""
-    [ -n "${_ls}" ] && return 0
+    # ⚠️ `:(glob)` É A SEMÂNTICA DO HARNESS, e o pathspec NU não era — medido contra o binário em
+    #    2026-09-29 com lentes-sonda e o log `instructions-loaded.jsonl`:
+    #      · no harness o `*` NÃO cruza `/` (sonda carregou em `raso.kg.yaml`, NÃO em `nivel/fundo`)
+    #      · no pathspec NU do git ele CRUZA: `docs/*.md` devolve 1074 hits, 1072 deles PROFUNDOS
+    #    Efeito do que havia antes: lente MORTA (um `*` que só casaria em subdiretório) era
+    #    ABSOLVIDA — fail-open silencioso, o pior formato. `:(glob)` corrige exato: o mesmo
+    #    `docs/*.md` cai para 2 hits, zero profundos, e `**` segue cruzando nos dois. Sem
+    #    dependência nova, sem lista de casos, e o fallback de sufixo abaixo continua valendo.
+    # ⚠️ BRACES: o harness EXPANDE `{a,b}` e o git NÃO reconhece, nem com `:(glob)` (medido: 0 hits
+    #    nas duas formas). Efeito: lente VIVA acusada de morta — falso positivo HARD. Por isso a
+    #    expansão acontece AQUI, antes de consultar o git, e o casamento é por QUALQUER alternativa,
+    #    que é o que o harness faz. A expansão é de UM nível e só de `{…}` sem `/` dentro: braces
+    #    aninhadas ou com barra ficam de fora e seguem pelo caminho literal — inflar o casamento
+    #    seria trocar um falso positivo por um fail-open, e o teto fica declarado em vez de chutado.
+    local _alts _a
+    _alts="$(_expand_braces "${g}")"
+    while IFS= read -r _a; do
+      [ -n "${_a}" ] || continue
+      # SEM PIPE (ver a nota de EPIPE acima): capturar em variável não tem leitor que feche cedo.
+      _ls="$(git -C "${REPO_ROOT}" ls-files -- ":(glob)${_a}")" || _ls=""
+      [ -n "${_ls}" ] && return 0
+      # o harness escreve '**/x'; o pathspec do git resolve o mesmo com o sufixo puro
+      _ls="$(git -C "${REPO_ROOT}" ls-files -- ":(glob)${_a#\*\*/}")" || _ls=""
+      [ -n "${_ls}" ] && return 0
+    done <<< "${_alts}"
     return 1
   fi
   # ⚠️ RAMO NÃO-GIT — e ele MENTIU (2026-09-17, medido). A forma anterior era
@@ -1123,17 +1180,36 @@ _rule_glob_matches() { # $1=glob
   # substratos, e o barato era o que eu media. Classe [[testar-no-caminho-errado-e-nao-testar]].
   # Agora o ramo não-git respeita o PREFIXO literal do glob, como o pathspec do git faz.
   local prefix root _hit
-  prefix="$(_glob_literal_prefix "${g}")"
-  root="${REPO_ROOT}${prefix:+/${prefix}}"
-  [ -e "${root}" ] || return 1
-  pat="${g##*/}"
-  case "${pat}" in
-    ''|'*'|'**')                                   # sufixo puro-curinga: basta haver arquivo sob o prefixo
-      _hit="$(find "${root}" -type f -not -path '*/.git/*' -print -quit 2>/dev/null)" ;;
-    *)                                             # '**/*.kg.yaml' → '*.kg.yaml', procurado SOB o prefixo
-      _hit="$(find "${root}" -name "${pat}" -not -path '*/.git/*' -print -quit 2>/dev/null)" ;;
-  esac
-  [ -n "${_hit}" ]                                 # sem pipe: `find | grep -q` é a corrida EPIPE de sempre
+  # ⚠️ AS MESMAS DUAS DIVERGÊNCIAS DO RAMO GIT VALEM AQUI, e a bancada foi quem me mostrou: a
+  #    sandbox de fixtures é montada com `tar` (sem `.git`), então é ESTE o ramo que a cobertura
+  #    ponta-a-ponta exercita. Eu havia curado só o ramo git, e as três fixtures novas reprovaram —
+  #    não por estarem erradas, mas por medirem o caminho que eu não tinha tocado. Classe
+  #    [[testar-no-caminho-errado-e-nao-testar]], invertida: curei o caminho que eu media.
+  #      · `*` NÃO cruza `/` no harness (medido por sonda): logo um sufixo com `*` procura em UM
+  #        nível (`-maxdepth 1`), e só `**` é que desce a árvore;
+  #      · braces EXPANDEM no harness: a expansão é de um nível, igual à do ramo git, e o casamento
+  #        é por QUALQUER alternativa. Braces aninhadas ou com `/` dentro ficam de fora, de propósito.
+  local _alts_ng _ang
+  _alts_ng="$(_expand_braces "${g}")"
+  while IFS= read -r _ang; do
+    [ -n "${_ang}" ] || continue
+    prefix="$(_glob_literal_prefix "${_ang}")"
+    root="${REPO_ROOT}${prefix:+/${prefix}}"
+    [ -e "${root}" ] || continue
+    pat="${_ang##*/}"
+    case "${_ang}" in
+      *'**'*) _depth="" ;;                         # `**` desce a árvore
+      *)      _depth="-maxdepth 1" ;;              # `*` sozinho fica NUM nível, como o harness
+    esac
+    case "${pat}" in
+      ''|'*'|'**')                                 # sufixo puro-curinga: basta haver arquivo sob o prefixo
+        _hit="$(find "${root}" ${_depth} -type f -not -path '*/.git/*' -print -quit 2>/dev/null)" ;;
+      *)                                           # '**/*.kg.yaml' → '*.kg.yaml', procurado SOB o prefixo
+        _hit="$(find "${root}" ${_depth} -name "${pat}" -not -path '*/.git/*' -print -quit 2>/dev/null)" ;;
+    esac
+    [ -n "${_hit}" ] && return 0                   # sem pipe: `find | grep -q` é a corrida EPIPE de sempre
+  done <<< "${_alts_ng}"
+  return 1
 }
 
 check_rules_pathscoped() {
@@ -1141,6 +1217,25 @@ check_rules_pathscoped() {
   [ -d "${rules_dir}" ] || return 0          # sem rules/ → nada a checar (adotante)
   local rule globs g matched
   while IFS= read -r -d '' rule; do
+    # ⚠️ O PREDICADO "A LENTE ESTÁ RASTREADA?" FOI TENTADO AQUI E RETIRADO, em 2026-09-29, e o
+    #    porquê fica escrito para ninguém o reintroduzir no escuro. Ele era o 1o dos dois
+    #    sobreviventes da regra duplicada fundida nesta; parecia barato e reprovou as CINCO fixtures
+    #    desta própria regra. A causa: o harness de fixtures copia cada caso para
+    #    `.claude/rules/selftest-fixture-probe.md`, que é UNTRACKED por construção — a guarda nova
+    #    disparava primeiro e o predicado sob teste nunca rodava. E não há sinal que distinga a sonda
+    #    do harness de uma lente que existe só na máquina do autor: as duas são `??` no git.
+    #    Curar isso exigiria código de produção CIENTE DE TESTE (isentar um nome de arquivo do
+    #    harness), o que é pior que o risco coberto — e o risco é pequeno, porque lente untracked
+    #    não sobrevive ao `git add -A` que qualquer commit faz.
+    #    GAP DECLARADO, com gatilho: se uma lente untracked de fato causar dano (adotante sem a
+    #    doutrina, ou perda por `git clean`), o caminho é a guarda de RASTREAMENTO genérica do repo,
+    #    não um predicado especial aqui.
+    # (a1) CORPO não-vazio — o outro sobrevivente da REGRA 91 fundida: lente que só tem frontmatter
+    #      é carregada pelo harness e não diz nada, que é gasto de contexto sem doutrina.
+    if [ -z "$(awk 'NR>1 && /^---[[:space:]]*$/{f=1;next} f' "${rule}" | tr -d '[:space:]')" ]; then
+      violation "HARD" "${rule}" "regra path-scoped com CORPO VAZIO — o harness a carregaria e ela não diria nada — escreva a doutrina abaixo do frontmatter, ou remova a regra"
+      continue
+    fi
     # (a) frontmatter com `paths:` — sem isso a regra nunca é elegível a carregar
     if ! grep -qE '^paths:' "${rule}"; then
       violation "HARD" "${rule}" "regra path-scoped sem 'paths:' no frontmatter — nunca carrega (regra que não chega ao modelo é indistinguível de regra ausente) — adicione 'paths:' com ao menos um glob no frontmatter da regra"
@@ -1150,7 +1245,33 @@ check_rules_pathscoped() {
     # O `---` de fechamento do frontmatter TAMBÉM casa "^[[:space:]]*-", e sem o guard abaixo
     # ele entrava como o item de lista "--" — o ramo `paths:` VAZIO nunca disparava e caía no
     # ramo errado. Achado no dogfood da própria regra, 2026-08-03.
-    globs="$(awk '/^---[[:space:]]*$/{f=0;next} /^paths:/{f=1;next} /^[a-zA-Z_-]+:/{f=0} f&&/^[[:space:]]*-[[:space:]]+/{gsub(/^[[:space:]]*-[[:space:]]+/,""); gsub(/^["'"'"']|["'"'"']$/,""); print}' "${rule}")"
+    # ⚠️ TRÊS FORMAS DE `paths:`, e o parser só lia UMA — medido contra o BINÁRIO em 2026-09-29, com
+    #    lentes-sonda e o log `instructions-loaded.jsonl` (que registra `path_glob_match` com o arquivo
+    #    que disparou). O harness ACEITA e CARREGA as três; este parser só via a lista em bloco, então
+    #    acusava "paths: VAZIO" em lente VIVA:
+    #      · bloco   `paths:\n  - "x/**"`      → já lido
+    #      · escalar `paths: "x/**"`            → sonda CARREGOU; o parser devolvia vazio
+    #      · flow    `paths: ["x/**", "y/**"]`  → sonda CARREGOU; o parser devolvia vazio
+    #    Ler as três é ampliar o que a guarda ENXERGA, não afrouxar o que ela cobra: o predicado de
+    #    casamento (linha abaixo) segue o mesmo, e as formas novas passam a ser julgadas por ele.
+    globs="$(awk '
+      /^---[[:space:]]*$/{f=0;next}
+      /^paths:[[:space:]]*\[/ {                                    # flow-list numa linha
+        line=$0; sub(/^paths:[[:space:]]*\[/,"",line); sub(/\].*$/,"",line)
+        nglobs=split(line, parts, /[[:space:]]*,[[:space:]]*/)
+        for (i=1;i<=nglobs;i++){ g=parts[i]
+          gsub(/^[[:space:]]+|[[:space:]]+$/,"",g); gsub(/^["'"'"']|["'"'"']$/,"",g)
+          if (g!="") print g }
+        next }
+      /^paths:[[:space:]]*[^[:space:]]/ {                           # escalar na mesma linha
+        g=$0; sub(/^paths:[[:space:]]*/,"",g)
+        gsub(/^[[:space:]]+|[[:space:]]+$/,"",g); gsub(/^["'"'"']|["'"'"']$/,"",g)
+        if (g!="") print g
+        next }
+      /^paths:/{f=1;next}                                           # bloco: a lista vem abaixo
+      /^[a-zA-Z_-]+:/{f=0}
+      f&&/^[[:space:]]*-[[:space:]]+/{gsub(/^[[:space:]]*-[[:space:]]+/,""); gsub(/^["'"'"']|["'"'"']$/,""); print}
+    ' "${rule}")"
     if [ -z "${globs}" ]; then
       violation "HARD" "${rule}" "'paths:' declarado mas VAZIO — nenhum glob, a regra nunca carrega — adicione ao menos um glob sob 'paths:' (ex.: '  - \"**/*.sh\"')"
       continue
@@ -4601,6 +4722,7 @@ check_command_role_parity() {
     violation "SOFT" ".claude/commands/meta/" "REGRA 90 (Prosa de comando conhece os papéis que o script aceita): ${l#REGRA 90: }"
   done <<< "${out}"
 }
+
 
 check_radar_aufhebung
 check_radar_sources_freshness

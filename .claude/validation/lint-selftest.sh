@@ -3911,12 +3911,17 @@ edges:
     edge_type: SUPPORTS
     reason: "campo livre cujo texto contém on: como substring"
 KGEOF
+  # ⚠️ Desde 2026-10-07 id com ':' é REPROVADO pela gramática (alfabeto [A-Za-z0-9_]), então este
+  # grafo não sai mais verde. O que o caso prova continua o mesmo — a âncora do PARSE: o `to:` não é
+  # recortado na última ocorrência (nada de "v2" inexistente) e o `on:` não é lido de dentro do
+  # `reason:`. Por isso a única reprova aceita é a do ALFABETO; qualquer 'inexistente' é o bug velho.
   rc=0; out=$(bash "${radar}" "${tmp}/edge-collision.kg.yaml" --integrity 2>&1) || rc=$?
-  if [ "${rc}" -eq 0 ] \
-     && grep -q 'sem contradições estruturais' <<< "${out}" \
+  if [ "${rc}" -eq 1 ] \
+     && grep -q 'D_migrate_to:v2: id fora do alfabeto' <<< "${out}" \
+     && [ "$(grep -c '✗' <<< "${out}")" -eq 1 ] \
      && ! grep -q 'inexistente' <<< "${out}"; then
-    record_pass "kg-label-collision: aresta com id contendo ':' e campo livre citando 'on:' → integridade verde"
-  else record_fail "kg-label-collision: arestas/meta ancoradas" "esperava exit 0 sem 'inexistente'; rc=${rc} out=${out}"; fi
+    record_pass "kg-label-collision: aresta com id contendo ':' e campo livre citando 'on:' → parse ancorado (só o alfabeto reprova, nada 'inexistente')"
+  else record_fail "kg-label-collision: arestas/meta ancoradas" "esperava exit 1 SÓ por 'id fora do alfabeto', sem 'inexistente'; rc=${rc} out=${out}"; fi
 }
 
 # ---------------------------------------------------------------------------
@@ -5470,6 +5475,24 @@ run_research_workflow_selftests() {
   if [ -f "${rd}" ] && grep -qF "mode: 'primaries'" "${rd}" && grep -qF 'wf_88199ba9-b9a' "${rd}"; then
     record_pass "research-workflow: (m2) research-doctrine.md traz o gatilho varredura × primárias com os dois custos medidos"
   else record_fail "research-workflow: (m2)" "doutrina sem o gatilho de escolha varredura × primárias (ou sem os run ids)"; fi
+  # (o) o Elenxo chega INTEIRO ao write(KG). Medido em 2026-10-07 (run wf_da77c143-24c): um
+  #     .slice(0, 7000) sobre o JSON do Elenxo (17.832 chars) entregou 16 de 38 objeções ao escritor, e
+  #     13 sobreviventes (Slack, Teams, A2A, Discord) nunca viraram nó. Corte silencioso de evidência é
+  #     o defeito; a guarda reprova qualquer .slice( logo depois de serializar o Elenxo.
+  if grep -nE 'JSON\.stringify\((pElenxo|elenxo)[^)]*\)[^+;]*\.slice\(' "${wf}" >/dev/null; then
+    record_fail "research-workflow: (o)" "o JSON do Elenxo é cortado antes do write(KG): $(grep -nE 'JSON\.stringify\((pElenxo|elenxo)[^)]*\)[^+;]*\.slice\(' "${wf}" | head -2)"
+  else record_pass "research-workflow: (o) o Elenxo chega inteiro ao write(KG) (sem .slice sobre o JSON)"; fi
+  # (p) o write(KG) nasce no CONTRATO v3 (2026-10-08, SAC-71): desde o #967 o gate do contrato no CI
+  #     reprova grafo NOVO que suba a dívida SHOULD, e o escritor saía com data sem aspas, confirmed sem
+  #     provenance e label longo (curado à mão no #967 e no #968). Os DOIS prompts de write(KG) — o do modo
+  #     primárias e o dos demais — têm de carregar o bloco e mandar rodar o kg-contract-check.sh.
+  local _ncv _nck
+  _ncv="$(grep -c 'CONTRACT_V3 +\|+ CONTRACT_V3' "${wf}" || true)"
+  _nck="$(grep -c 'kg-contract-check.sh' "${wf}" || true)"
+  if grep -q "^const CONTRACT_V3 = " "${wf}" && [ "${_ncv:-0}" -ge 2 ] && [ "${_nck:-0}" -ge 3 ] \
+     && grep -q 'Sem fonte real, o nó NÃO é confirmed' "${wf}"; then
+    record_pass "research-workflow: (p) os dois write(KG) exigem o contrato v3 e rodam o kg-contract-check (sem inventar fonte)"
+  else record_fail "research-workflow: (p)" "write(KG) sem o contrato v3: def=$(grep -c '^const CONTRACT_V3 = ' "${wf}" || true) usos=${_ncv:-0} checagens=${_nck:-0}"; fi
 }
 
 run_research_lens_selftests() {
@@ -6132,6 +6155,66 @@ HDPY
       record_pass "env-exposure: (k) heredoc: corpo de texto entre aspas passa (markdown com **), corpo para shell/interpretador e expansão sem aspas são barrados; os 15 escapes das duas curas anteriores seguem barrados (30 casos)"
     else record_fail "env-exposure: (k) heredoc julgado pelo consumidor" "casos divergentes (índice:esperado>veio): ${hd_out}"; fi
   fi
+  # (l) GLOB pela regra do bash e pelo DISCO (SAC-68, 2026-10-08). Medido numa leva: 6 vetos em comando que
+  #     não lia .env nenhum — `*)` de um `case`, `ops/testing/*`, `for d in */`, `/home/marcio/*/` e `**`
+  #     num corpo de heredoc — porque o glob era testado com fnmatch, que casa `*` com nome OCULTO e o bash
+  #     não. As duas polaridades com pastas reais (o cwd vai no JSON, como o hook recebe): as formas medidas
+  #     passam; os escapes que a cura poderia abrir seguem barrados (pasta com prod.env, cd literal para ela,
+  #     cd com variável, subshell com cd, .env citado na mesma linha, glob com ponto).
+  if [ -f "${guard}" ]; then
+    local gl_out
+    gl_out="$(python3 - "${guard}" <<'GLPY'
+import json, os, subprocess, sys, tempfile
+E = '.' + 'env'
+root = tempfile.mkdtemp()
+com, sem = os.path.join(root, 'com'), os.path.join(root, 'sem')
+os.makedirs(os.path.join(com, 'sub')); os.makedirs(sem)
+open(os.path.join(com, 'prod' + E), 'w').close(); open(os.path.join(sem, 'a.txt'), 'w').close()
+def t(cmd, cwd):
+    p = subprocess.run(['bash', sys.argv[1]], input=json.dumps({'tool_name': 'Bash', 'tool_input': {'command': cmd}, 'cwd': cwd}),
+                       capture_output=True, text=True)
+    return p.returncode
+C = [(0, 'for i in $(seq 1 3); do s=$(gh pr checks 1 --json state); case "$s" in *PENDING*|"") sleep 1;; *) break;; esac; done', sem),
+     (0, "grep -n family ops/testing/*", sem),
+     (0, 'for d in */; do ( cd "$d" && bash x/env-check.sh --test linear ); done', sem),
+     (0, 'for d in /home/marcio/*/; do [ -f "${d}' + E + '" ] && echo "$d"; done', sem),
+     (0, "if x; then gh pr create --body-file /dev/stdin <<'B' && y $(z); fi\n- **CI:** vendor/kg/** e base:**\nB", sem),
+     (0, 'cat *', sem),
+     (0, 'for d in */; do test -f "$d/' + E + '" && echo "$d"; done', com),   # .env citado: só a regra do diretório salva
+     (2, 'cat *', com),
+     (2, 'grep -n T *', com),
+     (2, 'cd com && cat *', root),
+     (2, 'cd "$X" && cat *', sem),
+     (2, '(cd /tmp) ; cat *', com),
+     (2, 'cp ' + E + ' x' + E + ' && cat *', sem),
+     (2, 'cat .*', sem),
+     (2, 'cat *env', com),
+     (2, 'cat $X/*', sem),                       # variável no caminho: o disco não sabe onde é
+     (2, 'cat ./*', com),
+     (2, 'cat sub/../*', com),
+     (2, 'for f in */' + E + '; do cat "$f"; done', sem),
+     (2, 'for d in */; do cat "$d/' + E + '"; done', sem)]
+print(' '.join('%d:%d>%d' % (i, e, g) for i, (e, c, w) in enumerate(C) for g in [t(c, w)] if g != e))
+GLPY
+)" || gl_out="o harness do caso (l) não rodou"
+    if [ -z "${gl_out}" ]; then
+      record_pass "env-exposure: (l) glob julgado pela regra do bash e pelo disco: as 5 formas medidas passam; pasta com prod.env, cd, subshell, .env na linha e glob com ponto seguem barrados"
+    else record_fail "env-exposure: (l) glob" "casos divergentes (índice:esperado>veio): ${gl_out}"; fi
+  fi
+  # (m) o caminho sancionado para a pergunta "a chave tem \r?": --lint fala por NOME, nunca pelo valor; e o
+  #     leitor tira o \r final (uma chave colada de editor Windows saía com ele e virava HTTP 401)
+  local lt; lt="$(mktemp -d)"
+  printf 'LINEAR_API_KEY=SENTINELA-CR\r\nX="aberta\nY=ok\nLINEAR_TEAM_ID=team42\r\n' > "${lt}/.env"
+  printf 'A=1\nB="dois"\n' > "${lt}/ok"
+  local l1 l2 l3 lrc1=0 lrc2=0
+  l1="$(bash "${h}" --env "${lt}/.env" --lint 2>&1)" || lrc1=$?
+  l2="$(bash "${h}" --env "${lt}/ok" --lint 2>&1)" || lrc2=$?
+  l3="$(bash "${h}" --env "${lt}/.env" --get LINEAR_TEAM_ID 2>&1)"
+  rm -rf "${lt}"
+  if [ "${lrc1}" = 1 ] && [ "${lrc2}" = 0 ] && grep -q 'LINEAR_API_KEY: termina em' <<< "${l1}" && grep -q 'X: aspas duplas sem fechar' <<< "${l1}" \
+     && ! grep -q SENTINELA <<< "${l1}" && [ "${l3}" = team42 ]; then
+    record_pass "env-exposure: (m) --lint acusa \\r e aspas por NOME sem imprimir valor, cala no arquivo limpo, e o leitor tira o \\r final"
+  else record_fail "env-exposure: (m) --lint" "rc=${lrc1}/${lrc2} get=$(printf '%q' "${l3}") out=${l1:0:160}"; fi
   # (i) o veto está REGISTRADO no settings.json (guarda escrita e não ligada é guarda morta)
   if python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if any("pretooluse-env-guard.sh" in h.get("command","") for g in d["hooks"]["PreToolUse"] for h in g.get("hooks",[])) else 1)' "${REPO_ROOT}/.claude/settings.json"; then
     record_pass "env-exposure: (i) o veto está registrado no PreToolUse"
@@ -6304,6 +6387,46 @@ run_pre_push_selftests() {
     ( cd "${sb}/o" && git config user.email o@o && git config user.name o && sed -i 2s/.*/MAIN/ c.txt && git commit -qam main2 && git push -q origin main ) >/dev/null 2>&1
     g="$(_pf "${sb}" --rebase)"; _pfc "rebase limpo sobre main que mexe noutra linha → passa" 0 "${g}" "${sb}"
   fi
+  # ── SAC-67 (2026-10-08): conflito SÓ de projeção em plugins/ se resolve no --rebase; conflito de FONTE
+  # continua recusa. Medido antes: dois PRs que tocam fontes DIFERENTES conflitaram em 4 arquivos de
+  # plugins/ (provenance.json, README.md) e em 0 de fonte. Plugin de mentira: plugins/vx/README.md =
+  # s1.txt + s2.txt, montado por um assemble-plugin.sh que lê as fontes da árvore em que roda.
+  _plugsb() {  # <nome> → sandbox com plugins/vx na main, PR mexendo em s1.txt (linha adjacente à de s2)
+    sb="${d}/$1"; _sbmk "${sb}" || { record_fail "pr-finalize: sandbox $1" "não montou"; return 1; }
+    ( cd "${sb}/w" && git switch -q main \
+      && mkdir -p .claude/utils/marketplace/verticals plugins/vx \
+      && printf 'PLUGIN_NAME=vx\n' > .claude/utils/marketplace/verticals/vx.manifest.sh \
+      && printf '%s\n' '#!/bin/bash' 'mkdir -p "$3" && cat "$2/s1.txt" "$2/s2.txt" > "$3/README.md"' > .claude/utils/marketplace/assemble-plugin.sh \
+      && chmod +x .claude/utils/marketplace/assemble-plugin.sh \
+      && echo s1-base > s1.txt && echo s2-base > s2.txt && cat s1.txt s2.txt > plugins/vx/README.md \
+      && git add -A && git commit -qm plugbase && git push -q origin main \
+      && git switch -q feat/x && git reset -q --hard main \
+      && echo v1 > a.txt && sed -i 50s/.*/PR/ c.txt && echo s1-PR > s1.txt && cat s1.txt s2.txt > plugins/vx/README.md \
+      && printf -- '---\nreviewed_diff_sha256: pendente\nverdict: APROVADO\n---\n' > "${R}" && git add -A ) >/dev/null 2>&1
+  }
+  # (x1) a main mexe em s2.txt (outra FONTE): o README do plugin conflita, a fonte não → remonta e passa
+  if _plugsb plug1; then
+    g="$(_pf "${sb}" -m t1)"
+    git clone -q "${sb}/remote.git" "${sb}/o" 2>/dev/null
+    ( cd "${sb}/o" && git config user.email o@o && git config user.name o && echo s2-MAIN > s2.txt \
+      && cat s1.txt s2.txt > plugins/vx/README.md && git commit -qam main-s2 && git push -q origin main ) >/dev/null 2>&1
+    g="$(_pf "${sb}" --rebase)"
+    _rd="$(tr '\n' '|' < "${sb}/w/plugins/vx/README.md" 2>/dev/null)"
+    if [ "${g}" = 0 ] && [ "${_rd}" = "s1-PR|s2-MAIN|" ] && grep -q 'remontado das fontes mescladas' "${sb}/out"; then
+      record_pass "pr-finalize: SAC-67 (x1) conflito só de projeção em plugins/ → remontado das fontes mescladas (rc=0)"
+    else record_fail "pr-finalize: SAC-67 (x1) plugin em conflito" "rc=${g} README=${_rd}: $(tail -2 "${sb}/out" | tr '\n' ' ')"; fi
+  fi
+  # (x2) a main mexe na MESMA fonte (s1.txt): conflito REAL → recusa, rebase abortado, nada mudou
+  if _plugsb plug2; then
+    g="$(_pf "${sb}" -m t1)"; _h0="$(git -C "${sb}/w" rev-parse HEAD)"
+    git clone -q "${sb}/remote.git" "${sb}/o" 2>/dev/null
+    ( cd "${sb}/o" && git config user.email o@o && git config user.name o && echo s1-MAIN > s1.txt \
+      && cat s1.txt s2.txt > plugins/vx/README.md && git commit -qam main-s1 && git push -q origin main ) >/dev/null 2>&1
+    g="$(_pf "${sb}" --rebase)"
+    if [ "${g}" = 1 ] && grep -q 'conflito REAL em s1.txt' "${sb}/out" && [ "$(git -C "${sb}/w" rev-parse HEAD)" = "${_h0}" ]; then
+      record_pass "pr-finalize: SAC-67 (x2) conflito em FONTE continua recusa (rebase abortado, HEAD intacto)"
+    else record_fail "pr-finalize: SAC-67 (x2) conflito de fonte escondido" "rc=${g}: $(tail -2 "${sb}/out" | tr '\n' ' ')"; fi
+  fi
   # o hook julga o COMMIT EMPURRADO, não a árvore: commit com HARD, árvore limpa por cima
   if _new hookwt; then
     ( cd "${sb}/w" && printf 'v-v1\n' > .claude/validation/lint-rules.md && echo 1 > verdict && git add -A && git commit -qm bad && echo 0 > verdict ) >/dev/null 2>&1
@@ -6312,6 +6435,81 @@ run_pre_push_selftests() {
       | (cd "${sb}/w" && env ONION_PREPUSH_TEST=1 ONION_PREPUSH_PR=9 ONION_PREPUSH_LINT=.claude/validation/lint-artifacts.sh bash "${hook}" origin u >/dev/null 2>&1) || rc=$?
     if [ "${rc}" = 1 ]; then record_pass "pre-push: commit com HARD e árvore limpa → RECUSA (julga o commit)"
     else record_fail "pre-push: julgou a árvore" "rc=${rc}"; fi
+  fi
+
+  # ── SAC-66 (2026-10-08): os quatro atritos medidos na leva de 2026-10-07/08 ─────────────────────
+  # Hook de commit REAL no sandbox (core.hooksPath fora da árvore): conta as chamadas e reprova se
+  # houver ${s}/hookfail. Ao reprovar, escreve a violação no ONION_LINT_HARD_FILE que o motor passa.
+  _hk() {  # <dir> → instala o hook contador no sandbox
+    mkdir -p "$1/hooks"
+    printf '%s\n' '#!/bin/bash' "echo x >> '$1/hooklog'" \
+      "if [ -f '$1/hookfail' ]; then echo 'VIOLATION: x: REGRA 99 (Teste do motor)'; [ -n \"\${ONION_LINT_HARD_FILE:-}\" ] && echo 'VIOLATION: x: REGRA 99 (Teste do motor)' > \"\${ONION_LINT_HARD_FILE}\"; echo '❌ Commit bloqueado'; exit 1; fi" \
+      'exit 0' > "$1/hooks/pre-commit"
+    chmod +x "$1/hooks/pre-commit"; git -C "$1/w" config core.hooksPath "$1/hooks"
+  }
+  _pfn() {  # <dir> [args...] → rc do motor SEM checkpoint (o hook vale)
+    local s="$1" r=0; shift
+    (cd "${s}/w" && env -u ONION_FINALIZE_CHECKPOINT bash "${pf}" "$@" > "${s}/out" 2>&1) || r=$?
+    printf '%s' "${r}"
+  }
+  _hits() { [ -f "$1/hooklog" ] && wc -l < "$1/hooklog" | tr -d ' ' || echo 0; }
+  _respend() {  # o resíduo está 'pendente' no arquivo E no índice, sem hash de código?
+    grep -qx 'reviewed_diff_sha256: pendente' "$1/w/${R}" && ! grep -q '^reviewed_code_sha256:' "$1/w/${R}" \
+      && grep -qx 'reviewed_diff_sha256: pendente' <<< "$(git -C "$1/w" show ":${R}")"
+  }
+  # (2) commit SÓ de projeção não religa o hook — o lint do commit no passo 3 é a passada única
+  if _new sac-proj; then
+    _hk "${sb}"
+    ( cd "${sb}/w" && git commit -q --no-verify -m conteudo -- a.txt c.txt ) >/dev/null 2>&1
+    g="$(_pfn "${sb}")"; _pfc "SAC-66 (2): commit só de projeção e resíduo" 0 "${g}" "${sb}"
+    if [ "$(_hits "${sb}")" = 0 ] && grep -q 'sem o hook' "${sb}/out"; then
+      record_pass "pr-finalize: SAC-66 (2) commit só de projeção NÃO religa o hook (0 chamadas, declarado na saída)"
+    else record_fail "pr-finalize: SAC-66 (2) religou o hook" "chamadas=$(_hits "${sb}"): $(tail -2 "${sb}/out" | tr '\n' ' ')"; fi
+  fi
+  # (2, polaridade) conteúdo do PR no índice → o hook RODA, como sempre
+  if _new sac-conteudo; then
+    _hk "${sb}"
+    g="$(_pfn "${sb}")"; _pfc "SAC-66 (2) polaridade: conteúdo no índice" 0 "${g}" "${sb}"
+    if [ "$(_hits "${sb}")" -ge 1 ]; then record_pass "pr-finalize: SAC-66 (2) conteúdo do PR no índice → o hook roda ($(_hits "${sb}") chamada(s))"
+    else record_fail "pr-finalize: SAC-66 (2) pulou o hook com conteúdo" "0 chamadas — fail-open"; fi
+  fi
+  # (3) e (1) o hook reprova: o motor NOMEIA a violação por último, e o resíduo volta a 'pendente'
+  if _new sac-reprova; then
+    _hk "${sb}"; : > "${sb}/hookfail"
+    g="$(_pfn "${sb}")"; _pfc "SAC-66 (3): hook reprova o commit" 1 "${g}" "${sb}"
+    if grep -q 'REGRA 99' <<< "$(grep -A1 'PR-FINALIZE: o que reprovou o commit:' "${sb}/out")"; then
+      record_pass "pr-finalize: SAC-66 (3) a violação do hook sai NOMEADA no fim da saída"
+    else record_fail "pr-finalize: SAC-66 (3) violação não nomeada" "$(tail -3 "${sb}/out" | tr '\n' ' ')"; fi
+    if _respend "${sb}"; then record_pass "pr-finalize: SAC-66 (1) commit recusado → resíduo volta a 'pendente' (arquivo e índice)"
+    else record_fail "pr-finalize: SAC-66 (1) carimbo ficou após o commit recusado" "$(grep '^reviewed_' "${sb}/w/${R}" | tr '\n' ' ')"; fi
+  fi
+  # (1) o lint do COMMIT reprova DEPOIS de o commit com o carimbo existir: o resíduo volta a 'pendente'
+  if _new sac-lint; then
+    ( cd "${sb}/w" && echo 1 > verdict && git add verdict ) >/dev/null 2>&1
+    g="$(_pf "${sb}")"; _pfc "SAC-66 (1): lint do commit reprova" 1 "${g}" "${sb}"
+    if _respend "${sb}"; then record_pass "pr-finalize: SAC-66 (1) lint do commit reprova → resíduo volta a 'pendente' (arquivo e índice)"
+    else record_fail "pr-finalize: SAC-66 (1) carimbo ficou após a falha" "$(grep '^reviewed_' "${sb}/w/${R}" | tr '\n' ' ')"; fi
+    # e a rodada seguinte, sem ninguém tocar no resíduo, carimba de novo em vez de recusar "o código mudou"
+    ( cd "${sb}/w" && echo 0 > verdict && git add verdict ) >/dev/null 2>&1
+    g="$(_pf "${sb}")"; _pfc "SAC-66 (1): a rodada seguinte, com a cura, passa sem limpeza à mão" 0 "${g}" "${sb}"
+  fi
+  # (4) --check não escreve NADA: árvore, índice, HEAD, refs e resíduo idênticos antes e depois
+  _st() { ( cd "$1/w" && git status --porcelain && git write-tree && git rev-parse HEAD && git for-each-ref && sha256sum "${R}" ) 2>&1; }
+  if _new sac-check; then
+    local _a _b; _a="$(_st "${sb}")"
+    g="$(_pfn "${sb}" --check)"; _pfc "SAC-66 (4): --check com a rodada que passaria" 0 "${g}" "${sb}"
+    _b="$(_st "${sb}")"
+    if [ "${_a}" = "${_b}" ] && grep -q 'lint-rules.md' "${sb}/out" && grep -q 'carimbaria' "${sb}/out"; then
+      record_pass "pr-finalize: SAC-66 (4) --check relata projeção e carimbo e não escreve nada"
+    else record_fail "pr-finalize: SAC-66 (4) --check" "estado mudou ou relato incompleto: $(tr '\n' ' ' < "${sb}/out" | cut -c1-200)"; fi
+    ( cd "${sb}/w" && echo 1 > verdict && git add verdict ) >/dev/null 2>&1
+    _a="$(_st "${sb}")"
+    g="$(_pfn "${sb}" --check)"; _pfc "SAC-66 (4): --check com HARD no commit resultante" 1 "${g}" "${sb}"
+    _b="$(_st "${sb}")"
+    if [ "${_a}" = "${_b}" ] && grep -q 'recusaria' "${sb}/out"; then
+      record_pass "pr-finalize: SAC-66 (4) --check que recusa também não escreve nada"
+    else record_fail "pr-finalize: SAC-66 (4) --check com HARD" "estado mudou ou sem a recusa: $(tr '\n' ' ' < "${sb}/out" | cut -c1-200)"; fi
+    g="$(_pfn "${sb}" --check --push)"; _pfc "SAC-66 (4): --check com --push → recusa" 1 "${g}" "${sb}"
   fi
 }
 
@@ -9146,6 +9344,9 @@ run_cited_directive_selftests() {
   #     Claude Code — duas atualizações em dois dias pintaram de vermelho PRs sem relação com a guarda, e a
   #     re-extração era à mão. Agora os identificadores entram como curinga (`⟨F⟩`, consistente dentro do
   #     trecho) e só a ESTRUTURA é comparada: renomear não é deriva; mudar o comportamento é.
+  #     AS LOCAIS DO LAÇO TAMBÉM (2026-10-09, SAC-84): a 2.1.295 trocou `for(let g…let h=` por
+  #     `for(let h…let y=` sem mudar uma vírgula do comportamento, e o (f) reprovou DERIVA porque o
+  #     molde fixava `g`/`h` — o curinga tinha parado nos nomes de função. `⟨G⟩`/`⟨H⟩` fecham isso.
   local _bin _miss; _bin="$(readlink -f "$(command -v claude 2>/dev/null)" 2>/dev/null || true)"
   _cd_struct() {  # <arquivo> → imprime os trechos AUSENTES (vazio = os 3 presentes)
     python3 - "$1" <<'CDPY'
@@ -9153,7 +9354,7 @@ import re, sys
 data = open(sys.argv[1], 'rb').read().decode('latin-1')
 T = [r'function ⟨F⟩(e){return e.replace(/`[^`\n]+`/g,(n,r)=>{let s=e[r-1];return s==="!"||s==="`"?n:"`"+',
      r'⟨B⟩=/```!\s*\n?([\s\S]*?)\n?```/g,⟨I⟩=/(?<=^|\s)!`([^`]+)`/gm',
-     r'let n=e.matchAll(⟨B⟩),r=e.includes("!`")?⟨F⟩(e).matchAll(⟨I⟩):[],s=[];for(let g of[...n,...r]){let h=⟨T⟩(g[1]??"");if(h)s.push({raw:g[0],command:h,at:g.index})}return s']
+     r'let n=e.matchAll(⟨B⟩),r=e.includes("!`")?⟨F⟩(e).matchAll(⟨I⟩):[],s=[];for(let ⟨G⟩ of[...n,...r]){let ⟨H⟩=⟨T⟩(⟨G⟩[1]??"");if(⟨H⟩)s.push({raw:⟨G⟩[0],command:⟨H⟩,at:⟨G⟩.index})}return s']
 for t in T:
     rx, seen = '', set()
     for part in re.split(r'(⟨[A-Z]⟩)', t):
@@ -9771,6 +9972,98 @@ run_kg_radar_integrity_selftests() {
     record_pass "kg-integridade: (d) grafo UNTRACKED contraditório é invisível — ponto cego declarado no cabeçalho"
   else record_fail "kg-integridade: (d)" "o ponto cego declarado não confere: ${out}"; fi
   rm -rf "$d"
+
+  # (e)-(h) DEFEITOS DE DADO medidos por um leitor tipado (2026-10-07): 12 ids `SYNTHESIS.md_*`
+  #     (nome de documento virou prefixo com a extensão) e `valid_from: 2026` sem aspas, que todo
+  #     leitor YAML tipado lê como INTEIRO. O id reprova; o valid_from inteiro só avisa (SOFT),
+  #     porque os adotantes carregam passivo. Cada polaridade tem o seu par.
+  # (e) id com PONTO → HARD, verbatim como apareceu no corpus.
+  d="$(mktemp -d)"; _mki "$d" sao
+  sed -i 's/C_alvo/SYNTHESIS.md_ALVO/g' "$d/docs/onion/graph/t.kg.yaml"
+  ( cd "$d" && git add -A && git -c user.email=t@t -c user.name=t commit -qm y ) 2>/dev/null
+  out="$(bash "${helper}" "$d" --format tsv 2>/dev/null || true)"
+  if grep -q '^HARD.*id fora do alfabeto' <<< "${out}"; then
+    record_pass "kg-integridade: (e) id com ponto (SYNTHESIS.md_*) → HARD 'id fora do alfabeto'"
+  else record_fail "kg-integridade: (e)" "id com ponto não reprovou: ${out}"; fi
+  rm -rf "$d"
+  # (f) id entre ASPAS duplas é o mesmo id → silêncio (o alfabeto não pode reprovar a citação).
+  d="$(mktemp -d)"; _mki "$d" sao
+  sed -i 's/- id: C_alvo/- id: "C_alvo"/' "$d/docs/onion/graph/t.kg.yaml"
+  ( cd "$d" && git add -A && git -c user.email=t@t -c user.name=t commit -qm y ) 2>/dev/null
+  out="$(bash "${helper}" "$d" --format tsv 2>/dev/null || true)"
+  if [ -z "${out}" ]; then
+    record_pass "kg-integridade: (f) id entre aspas duplas → silêncio (aspas não são o alfabeto)"
+  else record_fail "kg-integridade: (f)" "falso-positivo em id entre aspas: ${out}"; fi
+  rm -rf "$d"
+  # (g) valid_from: 2026 SEM aspas → SOFT VALID-FROM-INTEIRO, e NÃO HARD.
+  d="$(mktemp -d)"; _mki "$d" sao
+  sed -i '/- id: E_ref/a\    valid_from: 2026' "$d/docs/onion/graph/t.kg.yaml"
+  ( cd "$d" && git add -A && git -c user.email=t@t -c user.name=t commit -qm y ) 2>/dev/null
+  out="$(bash "${helper}" "$d" --format tsv 2>/dev/null || true)"
+  if grep -q '^SOFT	VALID-FROM-INTEIRO' <<< "${out}" && ! grep -q '^HARD' <<< "${out}"; then
+    record_pass "kg-integridade: (g) valid_from: 2026 sem aspas → SOFT VALID-FROM-INTEIRO (nunca HARD)"
+  else record_fail "kg-integridade: (g)" "valid_from inteiro não virou SOFT: ${out}"; fi
+  rm -rf "$d"
+  # (h) o MESMO ano entre aspas → silêncio. O radar tira as aspas no trim; a guarda lê a forma
+  #     crua — a 1ª redação lia o valor já sem aspas e acusou 35 nós corretos em 10 grafos do core.
+  d="$(mktemp -d)"; _mki "$d" sao
+  sed -i "/- id: E_ref/a\\    valid_from: '2026'" "$d/docs/onion/graph/t.kg.yaml"
+  ( cd "$d" && git add -A && git -c user.email=t@t -c user.name=t commit -qm y ) 2>/dev/null
+  out="$(bash "${helper}" "$d" --format tsv 2>/dev/null || true)"
+  if [ -z "${out}" ]; then
+    record_pass "kg-integridade: (h) valid_from: '2026' entre aspas → silêncio"
+  else record_fail "kg-integridade: (h)" "falso-positivo em ano entre aspas: ${out}"; fi
+  rm -rf "$d"
+
+  # (i)/(j) GATILHO DE TRANSITIONS: `trigger:` é a chave; `on:` é legado (YAML 1.1 lê `on` como
+  #     booleano). Grafo de domínio mínimo: estado A --TRANSITIONS--> estado B, disparado por EV_X.
+  _mkt() {  # $1=dir  $2=chave do gatilho
+    mkdir -p "$1/.claude/validation" "$1/docs/onion/graph"
+    cp "${REPO_ROOT}/.claude/validation/kg-radar.sh" "$1/.claude/validation/"; _lib_beside "$1/.claude/validation"
+    { printf 'meta:\n  id: t\n  schema_version: "1"\nnodes:\n'
+      local n; for n in ST_A:state ST_B:state EV_X:event; do
+        printf '  - id: %s\n    node_type: %s\n    layer: domain\n    plane: DEV\n    impact: 3\n    status: confirmed\n    label: "x"\n' "${n%%:*}" "${n#*:}"
+      done
+      printf 'edges:\n  - from: ST_A\n    to: ST_B\n    edge_type: TRANSITIONS\n    %s: EV_X\n' "$2"
+    } > "$1/docs/onion/graph/t.kg.yaml"
+    ( cd "$1" && git init -q . && git add -A && git -c user.email=t@t -c user.name=t commit -qm x ) 2>/dev/null
+  }
+  # (i) `on:` legado → SOFT ON-LEGADO, nunca HARD (o evento segue LIGADO: sem órfão).
+  d="$(mktemp -d)"; _mkt "$d" on
+  out="$(bash "${helper}" "$d" --format tsv 2>/dev/null || true)"
+  if grep -q '^SOFT	ON-LEGADO	docs/onion/graph/t.kg.yaml' <<< "${out}" && ! grep -q '^HARD' <<< "${out}"; then
+    record_pass "kg-integridade: (i) gatilho em on: (legado) → SOFT ON-LEGADO nomeando o arquivo, sem HARD"
+  else record_fail "kg-integridade: (i)" "on: legado não virou SOFT (ou reprovou): ${out}"; fi
+  rm -rf "$d"
+  # (j) o MESMO grafo com `trigger:` → silêncio, e o evento conta como ligado (sem órfão).
+  d="$(mktemp -d)"; _mkt "$d" trigger
+  out="$(bash "${helper}" "$d" --format tsv 2>/dev/null || true)"
+  if [ -z "${out}" ]; then
+    record_pass "kg-integridade: (j) gatilho em trigger: → silêncio (evento ligado, sem aviso)"
+  else record_fail "kg-integridade: (j)" "trigger: acusado ou evento órfão: ${out}"; fi
+  rm -rf "$d"
+
+  # (k)/(l) CHAVE REPETIDA NUM NÓ (2026-10-08, sinal de campo: `trace` repetido em 5 grafos do core;
+  #     YAML 1.2 exige chave única e um leitor tipado fica com a última em silêncio). (k) usa o MESMO
+  #     valor nas duas linhas — a guarda antiga (2026-08-12) só via valores DIFERENTES e só em 4 campos.
+  d="$(mktemp -d)"; _mki "$d" sao
+  sed -i '/- id: E_ref/a\    trace: "a.md"\n    trace: "a.md"' "$d/docs/onion/graph/t.kg.yaml"
+  ( cd "$d" && git add -A && git -c user.email=t@t -c user.name=t commit -qm y ) 2>/dev/null
+  out="$(bash "${helper}" "$d" --format tsv 2>/dev/null || true)"
+  if grep -q '^HARD' <<< "${out}" && grep -q 'trace repetido em E_ref' <<< "${out}"; then
+    record_pass "kg-integridade: (k) trace repetido num nó, mesmo com valor igual → HARD nomeando o nó"
+  else record_fail "kg-integridade: (k)" "chave repetida não reprovou: ${out}"; fi
+  rm -rf "$d"
+  # (l) UMA chave trace + label em bloco (>-) cujo texto tem 'trace:' mais à direita → silêncio.
+  #     Só a coluna dos campos do nó conta; texto de bloco e mapa aninhado não são chave do nó.
+  d="$(mktemp -d)"; _mki "$d" sao
+  sed -i '/- id: E_ref/a\    trace: "a.md"\n    narrative: >-\n      trace: dentro do texto\n      trace: de novo' "$d/docs/onion/graph/t.kg.yaml"
+  ( cd "$d" && git add -A && git -c user.email=t@t -c user.name=t commit -qm y ) 2>/dev/null
+  out="$(bash "${helper}" "$d" --format tsv 2>/dev/null || true)"
+  if [ -z "${out}" ]; then
+    record_pass "kg-integridade: (l) trace único + 'trace:' dentro de texto em bloco → silêncio"
+  else record_fail "kg-integridade: (l)" "falso-positivo com texto em bloco: ${out}"; fi
+  rm -rf "$d"
 }
 
 run_kg_census_parity_selftests() {
@@ -9829,6 +10122,18 @@ run_kg_census_parity_selftests() {
   else record_fail "kg-paridade: (b)" "falso-positivo em grafo so: rc=${rc} ${out}"; fi
   rm -rf "$d"
 
+  # (b2) o MESMO grafo forjado de (a), mas sob fixtures/ → fora da varredura (predicado ÚNICO de
+  #      fixture, o da REGRA 52). Sinal de campo 2026-10-07: casos de conformidade que o radar não lê
+  #      de propósito viravam aviso aqui. (a) prova que o conteúdo ainda é acusado fora de fixtures.
+  d="$(mktemp -d)"; _mkpar "$d" forjado
+  ( cd "$d" && mkdir -p docs/fixtures && git mv docs/t.kg.yaml docs/fixtures/t.kg.yaml \
+      && git -c user.email=t@t -c user.name=t commit -qm fx ) >/dev/null 2>&1 || true
+  rc=0; out="$(bash "${helper}" "$d" --format tsv 2>/dev/null)" || rc=$?
+  if [ "${rc}" -eq 0 ] && ! grep -q 'B_ESCONDIDO' <<< "${out}"; then
+    record_pass "kg-paridade: (b2) grafo forjado sob fixtures/ → fora da varredura (predicado único)"
+  else record_fail "kg-paridade: (b2)" "fixture entrou na varredura: rc=${rc} ${out}"; fi
+  rm -rf "$d"
+
   # (c) MUT DO REQUISITO NAO-NEGOCIAVEL — e o unico caso desta familia que justifica a familia.
   #     O no forjado a SEIS espacos. Guarda que ancora em dois fixos passa aqui e e decoracao.
   d="$(mktemp -d)"; _mkpar "$d" forjado-fundo
@@ -9846,7 +10151,7 @@ run_kg_census_parity_selftests() {
   #     imitar), e a asercao passa a ser sobre isso: com o radar MUTADO, a guarda tem de concordar
   #     com o motor mutado — nao com a memoria do antigo.
   d="$(mktemp -d)"; mkdir -p "$d/val/lib" "$d/docs"
-  cp "${REPO_ROOT}/.claude/validation/kg-radar.sh" "${helper}" "$d/val/"
+  cp "${REPO_ROOT}/.claude/validation/kg-radar.sh" "${helper}" "${REPO_ROOT}/.claude/validation/kg-fixture-paths.sh" "$d/val/"
   cp "${REPO_ROOT}/.claude/validation/lib/status-factor.awk" "$d/val/lib/"
   # grafo SAO e comum: os dois leitores concordam, entao silencio
   { printf 'meta:\n  id: t\n  schema_version: "1"\nnodes:\n'
@@ -9893,7 +10198,7 @@ PYCR
   #      lib ao lado, a guarda leu saida vazia como `radar=0` e acusou DIVERGE num grafo SAO —
   #      ausencia lida como RESULTADO, a classe exata que esta onda cura.
   d="$(mktemp -d)"; mkdir -p "$d/val/lib" "$d/docs"
-  cp "${REPO_ROOT}/.claude/validation/kg-radar.sh" "${helper}" "$d/val/"
+  cp "${REPO_ROOT}/.claude/validation/kg-radar.sh" "${helper}" "${REPO_ROOT}/.claude/validation/kg-fixture-paths.sh" "$d/val/"
   { printf 'meta:\n  id: t\n  schema_version: "1"\nnodes:\n'
     printf '  - id: A_REAL\n    node_type: claim\n    plane: DEV\n    status: open\n'
     printf '    impact: 3\n    confidence: 0.8\n    label: "x"\nedges: []\n'
@@ -11631,6 +11936,21 @@ run_seed_adoption_graph_selftests() {
   if [ -f "${d}/docs/onion/graph/onion-adoption.kg.yaml" ] && [ "${rc}" -eq 0 ]; then
     record_pass "seed-graph: (a) semeia e o RADAR aprova o próprio artefato gerado"
   else record_fail "seed-graph: (a)" "não semeou, ou o radar reprovou o grafo gerado (rc=${rc})"; fi
+  # (v3) a semente nasce conforme ao CONTRATO v3 do .kg.yaml (2026-10-08, SAC-71): a 1ª redação trazia
+  #      chaves de topo fora do contrato, datas sem aspas e labels de até 520 caracteres sem provenance —
+  #      11 avisos SHOULD no 1º grafo de todo adotante. Julga com o leitor de referência vendorizado.
+  if [ -f "${REPO_ROOT}/vendor/kg-ssot/tools/kg_gate.py" ] && python3 -c 'import yaml, jsonschema' >/dev/null 2>&1; then
+    local _v3o _v3rc _v3sb; _v3sb="$(mktemp -d)"
+    mkdir -p "${_v3sb}/.claude/validation" "${_v3sb}/vendor" "${_v3sb}/g"
+    cp "${REPO_ROOT}/.claude/validation/kg-contract-check.sh" "${_v3sb}/.claude/validation/"
+    cp -a "${REPO_ROOT}/vendor/kg-ssot" "${_v3sb}/vendor/"
+    cp "${d}/docs/onion/graph/onion-adoption.kg.yaml" "${_v3sb}/g/semente.kg.yaml"
+    git -C "${_v3sb}" init -q 2>/dev/null
+    if _v3o="$(cd "${_v3sb}" && bash .claude/validation/kg-contract-check.sh g/semente.kg.yaml 2>&1)"; then _v3rc=0; else _v3rc=$?; fi
+    if [ "${_v3rc}" -eq 0 ]; then record_pass "seed-graph: (v3) a semente nasce conforme ao contrato v3 (MUST e SHOULD vazios)"
+    else record_fail "seed-graph: (v3)" "a semente sai fora do contrato v3 (rc=${_v3rc}): ${_v3o}"; fi
+    rm -rf "${_v3sb}"
+  else record_skip "seed-graph: (v3) vendor do contrato ou PyYAML/jsonschema ausentes (SUT não exercido)"; fi
   # (a2) DOCUMENTO ÚNICO, e o /meta:drive o LÊ (sinal de campo onion-slm, 2026-10-06): a semente abria e
   #      fechava o cabeçalho com `---`; o radar aceitava e o kg-drive-project.sh recusava com exit 2 — o 1º
   #      grafo de todo adotante nascia fora do /meta:drive. A asserção é a do CONSUMIDOR que recusava.
@@ -11831,9 +12151,21 @@ run_pr_merge_verified_selftests() {
 #!/usr/bin/env bash
 args="$*"
 case "$args" in
-  *"pr view"*headRefOid*)          echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"; exit 0 ;;
+  *"pr view"*"json mergeable"*)
+      # sequência de respostas (uma por chamada) — o auto-rebase lê de novo depois de cada rebase
+      if [ -n "${GH_MERGEABLE_SEQ:-}" ]; then
+        k=$(cat "${STUB_MK}" 2>/dev/null || echo 0); k=$((k+1)); echo "$k" > "${STUB_MK}"
+        v="$(printf '%s\n' ${GH_MERGEABLE_SEQ} | sed -n "${k}p")"
+        [ -n "$v" ] || v="$(printf '%s\n' ${GH_MERGEABLE_SEQ} | tail -1)"
+        echo "$v"
+      fi
+      exit 0 ;;
+  *"pr view"*headRefOid*)
+      if [ -n "${STUB_HEAD_SHA:-}" ]; then echo "${STUB_HEAD_SHA}"
+      elif [ -n "${STUB_HEAD_FROM:-}" ]; then git -C "${STUB_HEAD_FROM}" rev-parse HEAD; else echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"; fi
+      exit 0 ;;
   *"pr view"*headRepositoryOwner*) echo "owner/repo"; exit 0 ;;
-  *"pr view"*headRefName*)         echo "feat/alguma-coisa"; exit 0 ;;
+  *"pr view"*headRefName*)         echo "${GH_HEAD_REF:-feat/alguma-coisa}"; exit 0 ;;
   *"pr view"*statusCheckRollup*)
       if [ -n "${GH_VERDICT_FAIL:-}" ]; then echo "FAILURE"; else echo "SUCCESS"; fi; exit 0 ;;
   *"pr view"*state,mergedAt*)
@@ -11849,6 +12181,10 @@ case "$args" in
       printf '%s' "$body" > "${STUB_COMMENT}"
       exit "${GH_COMMENT_RC:-0}" ;;
   *"api "*check-runs*)
+      [ -n "${GH_RUNS_EMPTY:-}" ] && exit 0
+      if [ -n "${GH_CHECKS_API_500:-}" ]; then
+        echo "gh: Server Error (HTTP 500)" >&2; exit 1
+      fi
       if [ -n "${GH_VERDICT_FAIL:-}" ]; then
         printf 'onion-review-verdict\tcompleted\tfailure\n'
       fi
@@ -11858,7 +12194,18 @@ case "$args" in
         printf 'onion-review-verdict\tfail\t7s\turl\n'
       fi
       printf 'selftest\tpass\t1s\turl\n'; exit 0 ;;
-  *"pr merge"*)                    printf '%s\n' "${GH_MERGE_OUT}"; exit "${GH_MERGE_RC}" ;;
+  *"pr view"*baseRefName*)         echo "main"; exit 0 ;;
+  *"api "*pulls*commits*)
+      # os pais de cada commit do PR, um número por linha (1 = commit comum, 2 = commit de merge)
+      printf '%s\n' ${GH_PR_PARENTS:-1}; exit "${GH_PR_COMMITS_RC:-0}" ;;
+  *"api "*pulls*files*)
+      # os arquivos do PR, um por linha (SAC-80: só PR que toca .kg.yaml faz a guarda ler git)
+      [ -n "${GH_PR_FILES:-}" ] && printf '%s\n' ${GH_PR_FILES}; exit 0 ;;
+  *"pr merge"*)
+      [ -n "${STUB_MERGE_ARGS:-}" ] && printf '%s\n' "$args" >> "${STUB_MERGE_ARGS}"
+      # o merge DE VERDADE no sandbox, quando o caso precisa que a base mude (SAC-80, pós-merge)
+      [ -n "${STUB_MERGE_CMD:-}" ] && bash -c "${STUB_MERGE_CMD}" >/dev/null 2>&1
+      printf '%s\n' "${GH_MERGE_OUT}"; exit "${GH_MERGE_RC}" ;;
 esac
 exit 0
 STUB
@@ -12010,7 +12357,239 @@ STUB
     record_pass "pr-merge-verified: (n) post do registro falhando ⇒ die (precondição intacta)"
   else record_fail "pr-merge-verified: (n)" "rc=${_mv_rc} out=${_mv_out}"; fi
 
-  unset -f _mv _mvd
+  # ── (o)(p) API DE CHECKS EM FALHA ≠ ZERO CHECK-RUNS ────────────────────────────────────
+  # Defeito medido em 2026-10-07 (sinal de um adotante): HTTP 500 da API de check-runs por ~7 min.
+  # Com `2>/dev/null` o erro virava saída vazia e caía no ramo de ZERO check-runs, que mandava
+  # esperar e oferecia o --ci-inoperante. A direção (não mergear) era certa; o diagnóstico, não.
+  # (o) polaridade que ACUSA: API em 500 ⇒ die que NOMEIA a API e o HTTP, e NUNCA chega ao merge.
+  echo 0 > "${d}/n"; : > "${d}/merged"
+  _mv_out="$(PATH="${d}:${PATH}" STUB_N="${d}/n" GH_CHECKS_API_500=1 \
+             GH_STATE_BEFORE="OPEN|null" GH_STATE_AFTER="${M}" \
+             GH_MERGE_RC=0 GH_MERGE_OUT=merged bash "${sut}" 999 2>&1)"; _mv_rc=$?
+  if [ "${_mv_rc}" -ne 0 ] && grep -q "API de checks indisponível (HTTP 500)" <<< "${_mv_out}" \
+     && ! grep -q "ZERO check-runs" <<< "${_mv_out}" && ! grep -q "MERGED — provado" <<< "${_mv_out}"; then
+    record_pass "pr-merge-verified: (o) API de checks em HTTP 500 ⇒ die que nomeia a API (não 'zero check-runs')"
+  else record_fail "pr-merge-verified: (o) erro da API lido como zero check-runs" "rc=${_mv_rc} out=${_mv_out}"; fi
+  # (p) polaridade que CALA: API viva com zero runs continua no ramo antigo (espere / --ci-inoperante).
+  cat > "${d}/gh-zero" <<'STUB0'
+#!/usr/bin/env bash
+case "$*" in *"api "*check-runs*) exit 0 ;; esac
+exec "${GH_REAL_STUB}" "$@"
+STUB0
+  mkdir -p "${d}/zero"; cp "${d}/gh-zero" "${d}/zero/gh"; chmod +x "${d}/zero/gh"
+  echo 0 > "${d}/n"
+  _mv_out="$(PATH="${d}/zero:${d}:${PATH}" GH_REAL_STUB="${d}/gh" STUB_N="${d}/n" \
+             GH_STATE_BEFORE="OPEN|null" GH_STATE_AFTER="${M}" \
+             GH_MERGE_RC=0 GH_MERGE_OUT=merged bash "${sut}" 999 2>&1)"; _mv_rc=$?
+  if [ "${_mv_rc}" -ne 0 ] && grep -q "ZERO check-runs" <<< "${_mv_out}" \
+     && ! grep -q "API de checks indisponível" <<< "${_mv_out}"; then
+    record_pass "pr-merge-verified: (p) API viva com zero runs ⇒ ramo 'espere' intacto (sem falso alarme de API)"
+  else record_fail "pr-merge-verified: (p) zero runs virou erro de API" "rc=${_mv_rc} out=${_mv_out}"; fi
+
+  # ── (q)-(v) MODO DE MERGE E ANCESTRALIDADE (SAC-76, 2026-10-08) ──────────────────────────────
+  # Defeito medido num adotante: o script só fazia --rebase (fallback --squash); o PR de update, que
+  # traz um merge real com onion/vendor, entrava linearizado, e o update seguinte conflitava em falso.
+  _mvm() { # $1=GH_PR_PARENTS, resto = flags extras do SUT; grava em ${d}/margs os args do merge
+    echo 0 > "${d}/n"; : > "${d}/margs"
+    local _p="$1"; shift
+    _mv_out="$(PATH="${d}:${PATH}" STUB_N="${d}/n" STUB_MERGE_ARGS="${d}/margs" GH_PR_PARENTS="${_p}" \
+               GH_STATE_BEFORE="OPEN|null" GH_STATE_AFTER="${M}" \
+               GH_MERGE_RC=0 GH_MERGE_OUT=merged bash "${sut}" 999 "$@" 2>&1)"; _mv_rc=$?
+  }
+  # (q) --merge-commit ⇒ o merge sai com --merge, nunca --rebase/--squash, e o estado continua a prova
+  _mvm "1 2" --merge-commit
+  if [ "${_mv_rc}" -eq 0 ] && grep -q -- '--merge' "${d}/margs" && ! grep -q -- '--rebase\|--squash' "${d}/margs" \
+     && grep -q "MERGED — provado pelo ESTADO" <<< "${_mv_out}"; then
+    record_pass "pr-merge-verified: (q) --merge-commit ⇒ gh pr merge --merge, com a prova pelo estado"
+  else record_fail "pr-merge-verified: (q)" "rc=${_mv_rc} args=$(cat "${d}/margs") out=${_mv_out}"; fi
+  # (r) sem a flag ⇒ o comportamento antigo intacto (--rebase), mesmo com merge interno na branch
+  _mvm "1 2"
+  if [ "${_mv_rc}" -eq 0 ] && grep -q -- '--rebase' "${d}/margs" && ! grep -q -- ' --merge' "${d}/margs"; then
+    record_pass "pr-merge-verified: (r) sem --merge-commit ⇒ --rebase intacto (o modo nunca muda em silêncio)"
+  else record_fail "pr-merge-verified: (r)" "rc=${_mv_rc} args=$(cat "${d}/margs") out=${_mv_out}"; fi
+  # (s) polaridade que ACUSA: branch com commit de merge e sem a flag ⇒ aviso nomeado
+  if grep -q "carrega commit de MERGE" <<< "${_mv_out}" && grep -q -- "--merge-commit" <<< "${_mv_out}"; then
+    record_pass "pr-merge-verified: (s) merge interno sem --merge-commit ⇒ aviso que nomeia a flag"
+  else record_fail "pr-merge-verified: (s) aviso ausente" "out=${_mv_out}"; fi
+  # (t) polaridade que CALA: branch só com commits comuns ⇒ nenhum aviso
+  _mvm "1 1 1"
+  if [ "${_mv_rc}" -eq 0 ] && ! grep -q "carrega commit de MERGE" <<< "${_mv_out}"; then
+    record_pass "pr-merge-verified: (t) branch sem merge interno ⇒ sem aviso (nada de falso alarme)"
+  else record_fail "pr-merge-verified: (t) falso alarme" "out=${_mv_out}"; fi
+  # (u)(v) --assert-ancestor num repo de verdade: a ref É ancestral ⇒ rc 0; NÃO é ⇒ rc 3 nomeado
+  local r="${d}/repo"; mkdir -p "${r}"
+  ( cd "${r}" && git init -q -b main && git config user.email t@t && git config user.name t \
+    && echo a > a && git add a && git commit -qm base \
+    && git checkout -q -b onion/vendor && echo v > v && git add v && git commit -qm vendor \
+    && git checkout -q main && git merge -q --no-ff --no-edit onion/vendor \
+    && git checkout -q -b fora main~1 && echo x > x && git add x && git commit -qm fora \
+    && git checkout -q main && git remote add origin "${r}" ) >/dev/null 2>&1
+  echo 0 > "${d}/n"
+  _mv_out="$(cd "${r}" && PATH="${d}:${PATH}" STUB_N="${d}/n" GH_STATE_BEFORE="OPEN|null" GH_STATE_AFTER="${M}" \
+             GH_MERGE_RC=0 GH_MERGE_OUT=merged bash "${sut}" 999 --merge-commit --assert-ancestor onion/vendor 2>&1)"; _mv_rc=$?
+  if [ "${_mv_rc}" -eq 0 ] && grep -q "onion/vendor é ancestral de origin/main" <<< "${_mv_out}"; then
+    record_pass "pr-merge-verified: (u) --assert-ancestor com a ref ancestral ⇒ rc 0 e confirmação nomeada"
+  else record_fail "pr-merge-verified: (u)" "rc=${_mv_rc} out=${_mv_out}"; fi
+  echo 0 > "${d}/n"
+  _mv_out="$(cd "${r}" && PATH="${d}:${PATH}" STUB_N="${d}/n" GH_STATE_BEFORE="OPEN|null" GH_STATE_AFTER="${M}" \
+             GH_MERGE_RC=0 GH_MERGE_OUT=merged bash "${sut}" 999 --merge-commit --assert-ancestor fora 2>&1)"; _mv_rc=$?
+  if [ "${_mv_rc}" -eq 3 ] && grep -q "fora NÃO é ancestral de origin/main" <<< "${_mv_out}"; then
+    record_pass "pr-merge-verified: (v) --assert-ancestor com a ref fora da base ⇒ rc 3 nomeando a ref"
+  else record_fail "pr-merge-verified: (v)" "rc=${_mv_rc} out=${_mv_out}"; fi
+
+  # ── (w)-(z) AUTO-REBASE de PR CONFLICTING (2026-10-08) ─────────────────────────────────────
+  # Medido: o GitHub não dispara CI em PR em conflito, e a espera ficava parada em "no checks
+  # reported" (#957 2x, #959, #960, #975). Sandbox: um repo com a branch do PR numa worktree que tem
+  # um `ops/pr-finalize.sh` de mentira — ele registra a chamada e, conforme PF_MODE, simula o rebase
+  # bom (commit novo, HEAD anda) ou a recusa de conflito de FONTE. O SUT só pode rebasear ali.
+  local r2="${d}/r2" w2="${d}/r2-wt"
+  ( mkdir -p "${r2}" && cd "${r2}" && git init -q -b main && git config user.email t@t && git config user.name t \
+    && echo a > a && git add a && git commit -qm base && git branch feat/alguma-coisa \
+    && git worktree add -q "${w2}" feat/alguma-coisa ) >/dev/null 2>&1
+  mkdir -p "${w2}/ops"
+  cat > "${w2}/ops/pr-finalize.sh" <<'PFSTUB'
+#!/usr/bin/env bash
+echo "$*" >> "${PF_LOG}"
+if [ "${PF_MODE:-ok}" = fail ]; then
+  echo "PR-FINALIZE: conflito REAL em src/x.sh — rebase abortado, nada mudou; resolva à mão" >&2; exit 1
+fi
+echo "r$(wc -l < "${PF_LOG}")" > r; git add r; git -c user.email=t@t -c user.name=t commit -qm rebase
+echo "PR-FINALIZE: enviado feat/alguma-coisa @ $(git rev-parse --short HEAD)"
+PFSTUB
+  _mva() { # $1=sequência de mergeable  $2=PF_MODE  $3=headRefName ; o SUT roda a partir do repo principal
+    echo 0 > "${d}/n"; echo 0 > "${d}/mk"; : > "${d}/pflog"; : > "${d}/margs"
+    _mv_out="$(cd "${r2}" && PATH="${d}:${PATH}" STUB_N="${d}/n" STUB_MK="${d}/mk" GH_MERGEABLE_SEQ="$1" \
+               PF_MODE="$2" PF_LOG="${d}/pflog" GH_HEAD_REF="$3" STUB_HEAD_FROM="${w2}" STUB_MERGE_ARGS="${d}/margs" \
+               ONION_MERGE_POLL_SECS=0 ONION_MERGE_WAIT_SECS=5 \
+               GH_STATE_BEFORE="OPEN|null" GH_STATE_AFTER="${M}" GH_MERGE_RC=0 GH_MERGE_OUT=merged \
+               bash "${_sut_a:-${sut}}" 999 2>&1)"; _mv_rc=$?
+  }
+  # (w) CONFLICTING só-de-projeção ⇒ rebase UMA vez na worktree da branch, as runs nascem, o merge segue
+  _mva "CONFLICTING MERGEABLE" ok feat/alguma-coisa
+  if [ "${_mv_rc}" -eq 0 ] && [ "$(grep -c -- '--rebase --push' "${d}/pflog")" -eq 1 ] \
+     && grep -q "auto-rebase 1/2" <<< "${_mv_out}" && grep -q "MERGED — provado pelo ESTADO" <<< "${_mv_out}"; then
+    record_pass "pr-merge-verified: (w) PR CONFLICTING ⇒ auto-rebase na worktree da branch e merge provado"
+  else record_fail "pr-merge-verified: (w)" "rc=${_mv_rc} pf=[$(cat "${d}/pflog")] out=${_mv_out}"; fi
+  # (w2) depois do rebase as runs do head novo NÃO nascem ⇒ para no prazo, dizendo isso (não "CI verde vazio")
+  _mv_out="$(export GH_RUNS_EMPTY=1; _mva "CONFLICTING MERGEABLE" ok feat/alguma-coisa; printf '%s' "${_mv_out}")"
+  if grep -q "não nasceram/terminaram" <<< "${_mv_out}" && [ ! -s "${d}/margs" ]; then
+    record_pass "pr-merge-verified: (w2) runs do head novo não nascem ⇒ para no prazo, sem merge"
+  else record_fail "pr-merge-verified: (w2) espera das runs" "margs=[$(cat "${d}/margs")] out=${_mv_out}"; fi
+  # (x) conflito de FONTE ⇒ para nomeando o arquivo, e NÃO mergeia
+  _mva "CONFLICTING MERGEABLE" fail feat/alguma-coisa
+  if [ "${_mv_rc}" -ne 0 ] && grep -q "conflito REAL em src/x.sh" <<< "${_mv_out}" && [ ! -s "${d}/margs" ]; then
+    record_pass "pr-merge-verified: (x) conflito de fonte ⇒ para nomeando o arquivo, sem merge"
+  else record_fail "pr-merge-verified: (x) conflito real escondido" "rc=${_mv_rc} margs=[$(cat "${d}/margs")] out=${_mv_out}"; fi
+  # (y) branch fora de qualquer worktree ⇒ não rebaseia; diz o comando exato e para (nunca espera calado)
+  _mva "CONFLICTING MERGEABLE" ok feat/outra-branch
+  if [ "${_mv_rc}" -ne 0 ] && grep -qF "bash ops/pr-finalize.sh --rebase --push" <<< "${_mv_out}" && [ ! -s "${d}/pflog" ]; then
+    record_pass "pr-merge-verified: (y) sem worktree local ⇒ comando nomeado, nenhum rebase às cegas"
+  else record_fail "pr-merge-verified: (y)" "rc=${_mv_rc} pf=[$(cat "${d}/pflog")] out=${_mv_out}"; fi
+  # (z) conflito que VOLTA ⇒ no máximo 2 rebases, depois para (nada de laço)
+  _mva "CONFLICTING CONFLICTING CONFLICTING MERGEABLE" ok feat/alguma-coisa
+  if [ "${_mv_rc}" -ne 0 ] && grep -q "depois de 2 rebase" <<< "${_mv_out}" && [ "$(grep -c -- '--rebase' "${d}/pflog")" -eq 2 ]; then
+    record_pass "pr-merge-verified: (z) conflito recorrente ⇒ limite de 2 rebases, sem laço"
+  else record_fail "pr-merge-verified: (z) laço/limite" "rc=${_mv_rc} pf=[$(cat "${d}/pflog")] out=${_mv_out}"; fi
+
+  # ── (kg-a)-(kg-g) PROVENANCE DA BRANCH × REBASE (SAC-80, 2026-10-09) ─────────────────────────
+  # Defeito medido num adotante: o .kg.yaml do PR citava `caminho@<sha>` de commit da PRÓPRIA branch,
+  # o merge por rebase reescreveu o sha e 6 provenance ficaram fora da main com radar/lint/CI verdes.
+  # Sandbox: repo git de verdade (origin = ele mesmo), branches com o .kg.yaml citando a branch, a
+  # base, prosa e hex que não é sha. Cada caso roda contra o SUT E contra um MUTANTE que tira a
+  # parte da cura que o caso protege — o caso só passa se o mutante REPROVA (mutante que sobrevive
+  # é caso que não mede nada).
+  local r3="${d}/r3" _k_base _k_c1 _k_c1s _K_MSEQ=""
+  ( mkdir -p "${r3}" && cd "${r3}" && git init -q -b main && git config user.email t@t && git config user.name t \
+    && mkdir -p docs && printf 'nodes:\n' > docs/g.kg.yaml && echo a > a && git add -A && git commit -qm base \
+    && git checkout -q -b feat && echo doc > docs/doc.md && git add -A && git commit -qm doc \
+    && git checkout -q main && git remote add origin "${r3}" ) >/dev/null 2>&1
+  _k_base="$(git -C "${r3}" rev-parse main)"; _k_c1="$(git -C "${r3}" rev-parse feat)"; _k_c1s="${_k_c1:0:8}"
+  _kbr() { # $1=branch  $2=arquivo  $3=conteúdo acrescentado — a branch nasce de feat (que tem o commit citável)
+    ( cd "${r3}" && git checkout -q -b "$1" feat && printf '%s\n' "$3" >> "$2" && git add -A && git commit -qm "$1" \
+      && git checkout -q main ) >/dev/null 2>&1
+  }
+  _kbr pa docs/g.kg.yaml "  - id: E_X
+    provenance:
+      source: \"docs/doc.md@${_k_c1s}\"
+      method: \"medição: x\""
+  _kbr pc docs/g.kg.yaml "  - id: E_X
+    provenance: {source: \"a@${_k_base:0:8}\", method: \"medição: x@${_k_c1s}\"}"
+  _kbr pd docs/notes.md "source: \"docs/doc.md@${_k_c1s}\""
+  _kbr pe docs/g.kg.yaml "  - id: E_X
+    label: \"a prosa cita docs/doc.md@${_k_c1s} e não é proveniência\"
+    narrative: \"source: docs/doc.md@${_k_c1s}\"
+    provenance:
+      source: \"outro-repo/x.md@deadbee1\"
+      locator: \"docs/doc.md@${_k_c1s}\"
+      method: \"medição: y\""
+  _mvk() { # $1=SUT $2=branch $3=GH_PR_FILES $4=STUB_MERGE_CMD $5=STUB_HEAD_SHA ('' = o da branch) ; resto = flags
+    local s="$1" b="$2" fl="$3" mc="$4" hs="$5"; shift 5
+    [ -n "${hs}" ] || hs="$(git -C "${r3}" rev-parse "${b}" 2>/dev/null)"
+    git -C "${r3}" reset -q --hard "${_k_base}" >/dev/null 2>&1   # a base volta ao ponto de partida
+    echo 0 > "${d}/n"; echo 0 > "${d}/mk"; : > "${d}/margs"; : > "${d}/pflog"
+    _mv_out="$(cd "${r3}" && PATH="${d}:${PATH}" STUB_N="${d}/n" STUB_MK="${d}/mk" STUB_MERGE_ARGS="${d}/margs" \
+               STUB_HEAD_SHA="${hs}" GH_HEAD_REF="${b}" GH_PR_FILES="${fl}" STUB_MERGE_CMD="${mc}" \
+               GH_MERGEABLE_SEQ="${_K_MSEQ}" PF_LOG="${d}/pflog" ONION_MERGE_POLL_SECS=0 ONION_MERGE_WAIT_SECS=5 \
+               GH_STATE_BEFORE="OPEN|null" GH_STATE_AFTER="${M}" GH_MERGE_RC=0 GH_MERGE_OUT=merged \
+               bash "${s}" 999 "$@" 2>&1)"; _mv_rc=$?
+  }
+  # mutantes: âncoras por index() (string literal), e cada um PROVA que mudou o SUT antes de valer
+  local _m0="${d}/m0.sh" _mscope="${d}/mscope.sh" _mfield="${d}/mfield.sh" _manc="${d}/manc.sh"
+  awk '$0=="_kg_guard_pre"||$0=="    _kg_guard_post"{print ":"; next} {print}' "${sut}" > "${_m0}"
+  awk 'index($0,"grep -qE '"'"'\\.kg\\.yaml$'"'"'")>0{sub(/\\\.kg\\\.yaml\$/,".")} index($0,"-- '"'"'*.kg.yaml'"'"'")>0{sub(/-- '"'"'\*\.kg\.yaml'"'"'/,"-- .")} {print}' "${sut}" > "${_mscope}"
+  awk 'index($0,"if (l ~ /^[ \\t]*(-[ \\t]+)?source:/")>0{print "      if (1) {"; next} {print}' "${sut}" > "${_mfield}"
+  awk 'index($0,"if git merge-base --is-ancestor \"${_full}\" \"${_base_sha}\"")>0{sub(/if git merge-base --is-ancestor "\$\{_full\}" "\$\{_base_sha\}"/,"if false")} {print}' "${sut}" > "${_manc}"
+  local _mm _mok=1
+  for _mm in "${_m0}" "${_mscope}" "${_mfield}" "${_manc}"; do
+    cmp -s "${sut}" "${_mm}" && { _mok=0; record_fail "pr-merge-verified: (kg) âncora do mutante $(basename "${_mm}") não casou" "o SUT mudou de forma; reancore o mutante"; }
+  done
+  # _kcase "<nome>" <asserção> <mutante> -- <args do _mvk sem o SUT>
+  _kcase() {
+    local nm="$1" fn="$2" mu="$3"; shift 4
+    _mvk "${sut}" "$@"; local o1="${_mv_out}" r1="${_mv_rc}"
+    if ! "${fn}"; then record_fail "pr-merge-verified: ${nm}" "rc=${r1} margs=[$(cat "${d}/margs")] out=${o1}"; return; fi
+    [ "${_mok}" -eq 1 ] || return
+    _mvk "${mu}" "$@"
+    if "${fn}"; then
+      record_fail "pr-merge-verified: ${nm} — o MUTANTE $(basename "${mu}") SOBREVIVEU (o caso não mede a cura)" "rc=${_mv_rc} out=${_mv_out}"
+    else
+      record_pass "pr-merge-verified: ${nm} (mutante $(basename "${mu}") reprovado)"
+    fi
+  }
+  _ka() { [ "${_mv_rc}" -ne 0 ] && grep -qF "PRÓPRIA BRANCH" <<< "${_mv_out}" && grep -qF "${_k_c1s} em docs/g.kg.yaml" <<< "${_mv_out}" \
+          && grep -qF -- "--merge-commit" <<< "${_mv_out}" && [ ! -s "${d}/margs" ]; }
+  _kb() { [ "${_mv_rc}" -eq 0 ] && grep -q -- '--merge' "${d}/margs" && grep -qF "são ancestrais de origin/main" <<< "${_mv_out}"; }
+  _kb2() { [ "${_mv_rc}" -eq 3 ] && grep -qF "NÃO é ancestral de origin/main: ${_k_c1s} em docs/g.kg.yaml" <<< "${_mv_out}"; }
+  _kc() { [ "${_mv_rc}" -eq 0 ] && grep -q -- '--rebase' "${d}/margs" && grep -qF "nenhum commit da branch" <<< "${_mv_out}"; }
+  _kd() { [ "${_mv_rc}" -eq 0 ] && grep -q -- '--rebase' "${d}/margs" && ! grep -qi "provenance" <<< "${_mv_out}"; }
+  _ke() { [ "${_mv_rc}" -eq 0 ] && grep -q -- '--rebase' "${d}/margs" && grep -qF "1 @sha no .kg.yaml não resolve" <<< "${_mv_out}" \
+          && ! grep -qF "PRÓPRIA BRANCH" <<< "${_mv_out}"; }
+  _kf() { [ "${_mv_rc}" -ne 0 ] && grep -qF "auto-rebase reescreveria" <<< "${_mv_out}" && [ ! -s "${d}/pflog" ] && [ ! -s "${d}/margs" ]; }
+  _kg() { [ "${_mv_rc}" -ne 0 ] && grep -qF "não tenho o head" <<< "${_mv_out}" && [ ! -s "${d}/margs" ]; }
+  local KG="docs/g.kg.yaml docs/doc.md"
+  local MC_OK="git -C '${r3}' merge -q --no-ff --no-edit pa"
+  local MC_LIN="git -C '${r3}' merge -q --squash pa && git -C '${r3}' commit -qm linearizado"
+  # (kg-a) acusa: cita commit da branch, sem --merge-commit ⇒ recusa ANTES do merge, nomeando sha e arquivo
+  _kcase "(kg-a) .kg.yaml cita a branch, sem --merge-commit ⇒ recusa sem mergear" _ka "${_m0}" -- pa "${KG}" "" ""
+  # (kg-b) o mesmo com --merge-commit e um merge de verdade ⇒ passa, e a ancestralidade é CONFERIDA depois
+  _kcase "(kg-b) o mesmo com --merge-commit ⇒ mergeia e confere a ancestralidade" _kb "${_m0}" -- pa "${KG}" "${MC_OK}" "" --merge-commit
+  # (kg-b2) modo de falha: --merge-commit, mas o PR entra linearizado ⇒ rc 3 nomeando sha e arquivo
+  _kcase "(kg-b2) --merge-commit mas a base recebeu cópia linearizada ⇒ rc 3 nomeado" _kb2 "${_m0}" -- pa "${KG}" "${MC_LIN}" "" --merge-commit
+  # (kg-c) cala: sha ancestral da base (mais um @sha da branch dentro do `method:` do MESMO mapa em fluxo)
+  _kcase "(kg-c) sha ancestral da base ⇒ passa por --rebase sem exigir nada" _kc "${_m0}" -- pc "${KG}" "" ""
+  _kcase "(kg-c') idem contra o mutante sem o teste de ancestralidade" _kc "${_manc}" -- pc "${KG}" "" ""
+  # (kg-d) cala: PR sem .kg.yaml (o .md cita a branch num `source:`) ⇒ nada muda, nem leitura de git
+  _kcase "(kg-d) PR sem .kg.yaml ⇒ comportamento antigo intacto" _kd "${_mscope}" -- pd "docs/notes.md" "" ""
+  # (kg-e) FALSO POSITIVO: sha da branch em label/narrative/locator e hex que não é sha no source ⇒ não recusa
+  _kcase "(kg-e) sha da branch só em prosa + hex que não é sha ⇒ não recusa, e conta o que não resolve" _ke "${_mfield}" -- pe "${KG}" "" ""
+  # (kg-f) PR CONFLICTING com a branch citada ⇒ o auto-rebase NÃO roda (reescreveria o sha citado)
+  _K_MSEQ="CONFLICTING MERGEABLE"
+  _kcase "(kg-f) CONFLICTING + .kg.yaml citando a branch ⇒ sem auto-rebase, sem merge" _kf "${_m0}" -- pa "${KG}" "" "" --merge-commit
+  _K_MSEQ=""
+  # (kg-g) fail-closed: toca .kg.yaml e o head não existe localmente ⇒ não classifica, não mergeia
+  _kcase "(kg-g) .kg.yaml no PR e head ilegível ⇒ para (fail-closed)" _kg "${_m0}" -- nao-existe "${KG}" "" "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+  unset -f _mv _mvd _mvm _mva _mvk _kbr _kcase _ka _kb _kb2 _kc _kd _ke _kf _kg
 }
 
 # ═══ REGRA 90 — paridade papel: o SCRIPT aceita, a PROSA menciona ═════════════════════════
@@ -15300,7 +15879,9 @@ run_lint_hard_file_selftests() {
   else record_fail "lint-hard-file: (d) o lint aborta sem a variável" "$(tail -2 <<< "${_noenv}" | tr '\n' ' ')"; fi
   rm -f "${dir}/zz-hard-file-probe.md" "${hf}"
   # (c) o motor PEDE a lista e a IMPRIME ao reprovar (registro: arquivo que ninguém lê é recurso morto)
-  if grep -q 'ONION_LINT_HARD_FILE="${_tmp}/hard.txt"' "${REPO_ROOT}/ops/pr-finalize.sh" \
+  # (a forma mudou em 2026-10-08, SAC-66: o lint do commit virou a função _lint_in, que recebe o arquivo)
+  if grep -q 'ONION_LINT_HARD_FILE="$2"' "${REPO_ROOT}/ops/pr-finalize.sh" \
+     && grep -q '_lint_in "${_tmp}/wt" "${_tmp}/hard.txt"' "${REPO_ROOT}/ops/pr-finalize.sh" \
      && grep -q 'as violações HARD do commit' "${REPO_ROOT}/ops/pr-finalize.sh"; then
     record_pass "lint-hard-file: (c) o pr-finalize pede a lista e a imprime quando reprova"
   else record_fail "lint-hard-file: (c)" "o motor não usa a lista"; fi
@@ -15985,7 +16566,11 @@ run_role_cut_selftests() {
         #     MENÇÃO, não "a guarda MANDA rodar" — é a mesma classe que esta casa já mediu duas
         #     vezes (caso que cobra menção em vez de predicado). Separar os dois exige ler a
         #     POSIÇÃO da citação (mensagem de violação vs comentário), e isso é leva própria.
-        adopt|evolve|forge|dissect|forge-guard|create-*|federation-*|co-announce|co-deliver) continue ;;  # fábrica/federação
+        # `cc-update` entrou em 2026-10-08 pelo MESMO critério: re-mede a ESTRATÉGIA do core a
+        #     cada versão do Claude Code (radar E3 + selo da baseline do core), declara `Core-only`
+        #     na própria `description:`, e o `cc-delta-census.sh` o cita só no docstring. Quarto
+        #     comando pego na PRIMEIRA corrida depois de nascer (CI do PR #980).
+        adopt|evolve|forge|dissect|forge-guard|cc-update|create-*|federation-*|co-announce|co-deliver) continue ;;  # fábrica/federação
         nao|federation-) continue ;;                                            # falsos positivos do grep
       esac
       [ -f "${REPO_ROOT}/.claude/commands/meta/${_c}.md" ] || continue          # comando que não existe
@@ -17984,7 +18569,11 @@ run_kg_fixture_paths_selftests() {
     #    PRESENTE. Foi a classe que EU curei em 496 sítios nesta sessão e reintroduzi aqui: local
     #    1054/0, CI de 2 cores reprovando 1 caso. Conteúdo em VARIÁVEL, veredito por here-string.
     local _code; _code="$(grep -vE '^[[:space:]]*#' "${_root2}/${c}" || true)"
+    # 3ª forma de USO (2026-10-08): SOURCE do predicado + a regex dele aplicada no laço. As REGRAS 78 e
+    # 82 leem os caminhos por NUL (`-z`) e testam um a um; um fork por arquivo custaria segundos no
+    # lint. As duas peças são exigidas juntas: sourcear sem aplicar seria menção com outra roupa.
     grep -qF 'bash "${_KFP}"' <<< "${_code}" || grep -qF 'kg-fixture-paths.sh" --' <<< "${_code}" \
+      || { grep -qF '. "${_KFP}"' <<< "${_code}" && grep -qF 'KG_FIXTURE_RE' <<< "${_code}"; } \
       || cmiss="${cmiss} ${c}:não-INVOCA-o-predicado(menção em comentário não conta)"
     # e nenhuma reintrodução do grep próprio, nas 3 grafias que escapavam da 1ª versão (aspas
     # simples, aspas duplas, alternação -E). Ancorado no PADRÃO, não na pontuação.
@@ -18631,6 +19220,25 @@ PY
     record_pass "harvest-residue: resíduo COMPLETO → guarda cala (sem falso-positivo)"
   else record_fail "harvest-residue: completo" "falso-positivo com resíduo completo: ${out}"; fi
 
+  # (e) nó só MOVIDO (sai e volta no diff) não é colheita → cala. Falso positivo medido em
+  #     2026-10-07: a guarda pedia para nomear no resíduo um id que continuava no grafo.
+  ( cd "${sb}" && git checkout -q main && git checkout -q -b test/move-case
+    python3 - <<'PY2'
+import io
+p='docs/onion/graph/alvo.kg.yaml'; s=io.open(p,encoding='utf-8').read()
+i=s.index('  - id: N_SEGUNDO'); j=s.index('\nedges:', i)
+blk=s[i:j+1]; s=s[:i]+s[j+1:]
+k=s.index('  - id: N_PRIMEIRO'); s=s[:k]+blk+s[k:]
+io.open(p,'w',encoding='utf-8').write(s)
+PY2
+    git -c user.email=t@t -c user.name=t commit -qam mover ) >/dev/null 2>&1 || true
+  out="$(cd "${sb}" && bash .claude/validation/lint-artifacts.sh --only="${sb}/CLAUDE.md" 2>&1 || true)"
+  if grep -q 'N_SEGUNDO' <<< "$(cd "${sb}" && git diff main HEAD | grep -E '^-[[:space:]]*-[[:space:]]*id:')" \
+     && ! grep -q 'colheita sem registro' <<< "${out}" && ! grep -q 'não há resíduo de revisão' <<< "${out}"; then
+    record_pass "harvest-residue: nó só MOVIDO (sai e volta no diff) → guarda cala"
+  else record_fail "harvest-residue: movido" "nó movido virou colheita (ou o cenário não moveu): ${out}"; fi
+  ( cd "${sb}" && git checkout -q test/harvest-case ) >/dev/null 2>&1 || true
+
   # (d) SEM base resolvível → SOFT que DECLARA, nunca silêncio (o modo que matava a guarda no CI)
   local sbo
   sbo="$(TMPDIR=/tmp mktemp -d)"
@@ -18723,6 +19331,27 @@ PY
      && awk '/to: N_MORTO/{getline; print}' "$d/$g" | grep -q SUPERSEDES; then
     record_pass "census-seal: (d) DRIFTED+GATED vira CONSTRAINS (alvo segue open) e DRIFTED+MORTO vira SUPERSEDES"
   else record_fail "census-seal: (d)" "aresta pela realidade nao aplicada (rc=$rc): $out $(grep -A1 'to: N_' "$d/$g")"; fi
+  # (v3) o que o censo ESCREVE nasce no contrato v3 (2026-10-08, SAC-71): partindo de um grafo conforme,
+  #      o carimbo (CONFIRMED) e o nó novo (DRIFTED) não podem sujá-lo — data entre aspas, label ≤ 280 com
+  #      narrative, e provenance no nó confirmed. Antes, o nó DRIFTED nascia com label de até 330
+  #      caracteres, sem provenance, e o carimbo gravava a data sem aspas.
+  if [ -f "${REPO_ROOT}/vendor/kg-ssot/tools/kg_gate.py" ] && python3 -c 'import yaml, jsonschema' >/dev/null 2>&1; then
+    local v3o v3rc
+    rm -f "$d/$g"; mkdir -p "$d/.claude/validation" "$d/vendor" "$d/docs/onion/graph"
+    cp "${REPO_ROOT}/.claude/validation/kg-contract-check.sh" "$d/.claude/validation/"; cp -a "${REPO_ROOT}/vendor/kg-ssot" "$d/vendor/"
+    printf 'meta:\n  id: fx\n  schema_version: "1"\nnodes:\n  - id: N_GATED\n    node_type: question\n    plane: DEV\n    status: open\n    impact: 4\n    confidence: 0.9\n    verified_at: "2026-01-01"\n    verified_against: x\n    label: "a"\n  - id: N_OK\n    node_type: question\n    plane: DEV\n    status: open\n    impact: 4\n    confidence: 0.9\n    verified_at: "2026-01-01"\n    verified_against: x\n    label: "b"\n\nedges:\n  - from: N_GATED\n    to: N_OK\n    edge_type: SUPPORTS\n' > "$d/$g"
+    python3 - "$d/c.json" "$g" <<'PY'
+import json,sys
+m=lambda n,v,r: {"node_id":n,"kg_file":sys.argv[2],"verdict":v,"realidade":r,"gatilho_disparou":"NAO","juiz":"APROVADO","claims_total":1,"claims_measured":1,"method":"m","observed":"o","divergence":"d"*400}
+json.dump({"run_id":"wf_fixture","medidos":[m("N_GATED","DRIFTED","GATED"),m("N_OK","CONFIRMED","REAL")],"juizo":{},"nao_medidos_por_teto":[],"parametros":{}},open(sys.argv[1],'w'))
+PY
+    ONION_CENSUS_ROOT="$d" python3 "${seal}" seal "$d/c.json" >/dev/null 2>&1 || true
+    git -C "$d" init -q 2>/dev/null
+    if v3o="$(cd "$d" && bash .claude/validation/kg-contract-check.sh "$g" 2>&1)"; then v3rc=0; else v3rc=$?; fi
+    if [ "${v3rc}" -eq 0 ] && grep -q 'E_CENSO' "$d/$g"; then
+      record_pass "census-seal: (v3) o carimbo e o nó DRIFTED do censo nascem conformes ao contrato v3"
+    else record_fail "census-seal: (v3)" "o censo sujou o grafo (rc=${v3rc}): ${v3o}"; fi
+  else record_skip "census-seal: (v3) vendor do contrato ou PyYAML/jsonschema ausentes (SUT não exercido)"; fi
   rm -rf "$d"
 }
 
@@ -18872,6 +19501,24 @@ run_backlog_projection_selftests() {
     record_pass "backlog-projection: arg desconhecido → exit 2 e arquivo INTACTO (sem escrita silenciosa)"
   else record_fail "backlog-projection: arg desconhecido" "esperava rc=2 e arquivo intacto; rc=${rc} mutou=$([ "${before}" = "${after}" ] && echo nao || echo SIM)"; fi
 
+  # (c2)/(c3) GRAFO NOVO NÃO RASTREADO (sinal de campo 2026-10-07): fica FORA da projeção (o CI
+  #     regenera de clone limpo e não o vê) — mas é DITO no stderr, nomeado. Depois do `git add`, cala.
+  mkdir -p "${sb}/docs/evolution/research/sonda-untracked"
+  printf '# kg-backlog-guard: on\nmeta:\n  id: sonda-untracked\n  schema_version: "1"\nnodes:\n  - id: Q_SONDA\n    node_type: question\n    plane: DEV\n    impact: 3\n    confidence: 0.5\n    status: open\n    label: "sonda"\n  - id: E_SONDA\n    node_type: evidence\n    plane: DEV\n    impact: 3\n    confidence: 0.5\n    status: confirmed\n    label: "e"\nedges:\n  - from: E_SONDA\n    to: Q_SONDA\n    edge_type: SUPPORTS\n' \
+    > "${sb}/docs/evolution/research/sonda-untracked/sonda-untracked.kg.yaml"
+  local _err _md
+  _err="$(cd "${sb}" && bash .claude/validation/kg-backlog-project.sh --markdown 2>&1 >/dev/null || true)"
+  _md="$(cd "${sb}" && bash .claude/validation/kg-backlog-project.sh --markdown 2>/dev/null || true)"
+  if grep -q 'NÃO RASTREADO' <<< "${_err}" && grep -q 'sonda-untracked.kg.yaml' <<< "${_err}" && ! grep -q 'Q_SONDA' <<< "${_md}"; then
+    record_pass "backlog-projection: (c2) grafo novo não rastreado → fora da projeção, mas AVISADO e nomeado"
+  else record_fail "backlog-projection: (c2)" "não avisou (ou entrou na projeção): err=${_err}"; fi
+  ( cd "${sb}" && git add docs/evolution/research/sonda-untracked ) >/dev/null 2>&1 || true
+  _err="$(cd "${sb}" && bash .claude/validation/kg-backlog-project.sh --markdown 2>&1 >/dev/null || true)"
+  if ! grep -q 'NÃO RASTREADO' <<< "${_err}"; then
+    record_pass "backlog-projection: (c3) depois do git add → aviso cala"
+  else record_fail "backlog-projection: (c3)" "aviso persistiu após git add: ${_err}"; fi
+  ( cd "${sb}" && git rm -q -r --cached docs/evolution/research/sonda-untracked && rm -rf docs/evolution/research/sonda-untracked ) >/dev/null 2>&1 || true
+
   # (d) PARIDADE de render: `--markdown` (stdout, o que o lint compara) tem de ser
   #     byte-idêntico ao que `--write` grava. Senão a catraca compara dois renderizadores.
   ( cd "${sb}" && bash .claude/validation/kg-backlog-project.sh --markdown > "${sb}/md.out" 2>/dev/null
@@ -19019,6 +19666,14 @@ run_drive_selftests() {
   printf 'meta:\n  schema_version: 1\n%s\n' "${body}" > "${d2}/lote.kg.yaml"
   local _w=0
   bash "${ds}" "${d2}/lote.kg.yaml" --close-lot 'lote 9: PR #1' >/dev/null 2>&1 || _w=1
+  # CONTRATO v4 (2026-10-08): chave de extensão sem `x_` REPROVA no MUST, e todo grafo novo fechado
+  # por lote sairia reprovado no gate do CI. A escrita tem de ser `x_drive_checkpoint(_note)`, e a
+  # forma antiga não pode sobrar (a leitura dela segue aceita para grafo herdado, casos acima).
+  if grep -qx '  x_drive_checkpoint: pending' "${d2}/lote.kg.yaml" \
+     && grep -qx '  x_drive_checkpoint_note: "lote 9: PR #1"' "${d2}/lote.kg.yaml" \
+     && ! grep -qE '^  drive_checkpoint(_note)?:' "${d2}/lote.kg.yaml"; then
+    record_pass "drive: --close-lot escreve x_drive_checkpoint(+_note), a extensao que o contrato v4 aceita"
+  else record_fail "drive: chave do checkpoint" "a escrita nao saiu com o prefixo x_: $(grep -n checkpoint "${d2}/lote.kg.yaml" | head -3)"; fi
   rc=0; bash "${ds}" "${d2}/lote.kg.yaml" --check >/dev/null 2>&1 || rc=$?; [ "${rc}" -eq 1 ] || _w=2
   bash "${ds}" "${d2}/lote.kg.yaml" --seal >/dev/null 2>&1 || _w=3
   rc=0; bash "${ds}" "${d2}/lote.kg.yaml" --check >/dev/null 2>&1 || rc=$?; [ "${rc}" -eq 0 ] || _w=4
@@ -19526,15 +20181,25 @@ run_kg_yaml_validity_selftests() {
   if [ "${rc}" = "1" ] && grep -q 'mau2' <<< "${out}"; then
     record_pass "kg-yaml-validity: (d) NOVO fora da baseline → HARD (a catraca aperta, não afrouxa)"
   else record_fail "kg-yaml-validity: (d)" "arquivo novo passou com baseline armada (rc=${rc}): ${out}"; fi
-  # (e) FIXTURE inválida CONTA. Isentar fixture aqui seria isentar justamente o que a bancada usa
-  #     para provar que a guarda morde — e a casa já pagou por guarda cega ao próprio material de teste.
+  # (e) FIXTURE inválida é DITA (SOFT FIXTURE-INVALIDA) e NUNCA reprova. Antes de 2026-10-08 ela
+  #     CONTAVA como HARD, e um adotante com suíte de conformidade (casos deliberadamente não
+  #     parseáveis sob fixtures/) teve de renomear o caso para .yaml para passar. Mas isenção muda
+  #     seria a guarda cega ao próprio material de teste, que a casa já pagou: por isso é SOFT nomeado.
   rm -f "${d}/r/g/mau.kg.yaml" "${d}/r/g/mau2.kg.yaml"
   printf 'meta: { schema_version: 1 }\nnodes:\n  - id: Z\n    label: "fixture \\$ quebrada"\nedges: []\n' > "${d}/r/fx/fixtures/f.kg.yaml"
   ( cd "${d}/r" && git add -A ) >/dev/null 2>&1 || true
   rc=0; out="$(bash "${h}" "${d}/r" --format tsv 2>&1)" || rc=$?
-  if [ "${rc}" = "1" ] && grep -q 'fixtures/f.kg.yaml' <<< "${out}"; then
-    record_pass "kg-yaml-validity: (e) fixture inválida CONTA (não há isenção para material de teste)"
-  else record_fail "kg-yaml-validity: (e)" "fixture inválida passou (rc=${rc}): ${out}"; fi
+  if [ "${rc}" = "0" ] && grep -q '^SOFT	FIXTURE-INVALIDA	fx/fixtures/f.kg.yaml' <<< "${out}" && ! grep -q '^HARD' <<< "${out}"; then
+    record_pass "kg-yaml-validity: (e) fixture inválida → SOFT FIXTURE-INVALIDA nomeada, nunca HARD (nem cega, nem bloqueante)"
+  else record_fail "kg-yaml-validity: (e)" "esperava SOFT FIXTURE-INVALIDA com rc=0, veio rc=${rc}: ${out}"; fi
+  # (e2) o MESMO conteúdo FORA de fixtures segue HARD: a isenção é do predicado, não do conteúdo.
+  cp "${d}/r/fx/fixtures/f.kg.yaml" "${d}/r/g/fora.kg.yaml"
+  ( cd "${d}/r" && git add -A ) >/dev/null 2>&1 || true
+  rc=0; out="$(bash "${h}" "${d}/r" --format tsv 2>&1)" || rc=$?
+  if [ "${rc}" = "1" ] && grep -q '^HARD	INVALIDO	g/fora.kg.yaml' <<< "${out}"; then
+    record_pass "kg-yaml-validity: (e2) o mesmo conteúdo fora de fixtures/ → HARD (a isenção é do caminho)"
+  else record_fail "kg-yaml-validity: (e2)" "conteúdo inválido fora de fixtures não reprovou (rc=${rc}): ${out}"; fi
+  rm -f "${d}/r/g/fora.kg.yaml"; ( cd "${d}/r" && git add -A ) >/dev/null 2>&1 || true
   # (f) FAIL-CLOSED: verificador que não roda tem de sair 2, NUNCA 0. Foi assim que a 1ª versão
   #     mentiu — dois redirecionadores de entrada no mesmo comando, SyntaxError, e exit 0.
   mkdir -p "${d}/stub"
@@ -21182,6 +21847,9 @@ case "${_args}" in
   *"--json headRefOid"*)        echo "deadbeefcafe0000000000000000000000000000" ;;
   *"--json headRepository,headRepositoryOwner"*) echo "o/r" ;;
   *"--json headRefName"*)       echo "feat/x" ;;
+  # SAC-80: o SUT lê os arquivos do PR antes de tudo (fail-closed se não ler). Aqui o PR não toca
+  # .kg.yaml, então a guarda de provenance cala e esta família segue medindo só a dispensa.
+  *"pulls/"*"/files"*)          echo "ops/pr-merge-verified.sh" ;;
   *check-runs*)                 printf '%s\n' "${STUB_RUNS}" ;;
   "pr checks"*)                 printf '%s\n' "${STUB_CHECKS}" ;;
   *statusCheckRollup*)          printf '%s\n' "${STUB_VERDICT}" ;;
@@ -21767,6 +22435,30 @@ KG
     record_pass "dissect: (c2) review_after no passado ⇒ VENCIDO"
   else record_fail "dissect: (c2)" "esperado VENCIDO, veio '$(_col beta 6)'"; fi
 
+  # (x) CONTRATO v4 (2026-10-08): extensão sem `x_` REPROVA no MUST, então a dissecação nova se
+  #     declara com `x_dissect_tool`/`x_dissect_level`/`x_dissect_verdict`. O censo tem de ler a
+  #     forma nova com o MESMO rigor da antiga (nível máximo e veredito). MUTANTE: o grupo `(x_)`
+  #     fora do sed faz o grafo sumir do censo; o `\1` no lugar do `\2` devolve "x_" como ferramenta.
+  mkdir -p "${d}/docs/evolution/dissect/delta-2026-10"
+  cat > "${d}/docs/evolution/dissect/delta-2026-10/delta-2026-10.kg.yaml" <<'KG'
+meta:
+  id: delta-2026-10
+  x_dissect_tool: delta
+  baseline: "2026-10-01"
+  review_after: "2099-01-01"
+nodes:
+  - id: E_N3
+    x_dissect_level: 3
+  - id: E_N1
+    x_dissect_level: 1
+  - id: D_DELTA
+    x_dissect_verdict: absorver
+KG
+  _dc --tsv
+  if [ "$(_col delta 2)" = "3" ] && [ "$(_col delta 3)" = "absorver" ]; then
+    record_pass "dissect: (x) marcadores x_dissect_* (contrato v4) contam, com nivel maximo e veredito"
+  else record_fail "dissect: (x)" "esperado delta nivel 3 + absorver, veio: $(_emit "${_dc_out}" | grep delta | head -c 200)"; fi
+
   # (c3) MUTANTE DA POLARIDADE — SEM review_after ⇒ NAO-DECLARADO, JAMAIS "fresco" por omissao.
   #      Guarda que nao sabe nunca afirma conformidade (P0 da REGRA 30).
   mkdir -p "${d}/docs/evolution/dissect/gama-2026-10"
@@ -22307,6 +22999,27 @@ run_zoho_adapter_selftests() {
     record_pass "zoho-adapter: (e) o adapter avisa que ?search= NÃO filtra"
   else record_fail "zoho-adapter: (e)" "falta o aviso de que ?search= é aceito e ignorado — searchTasks devolveria a lista inteira como resultado"; fi
 
+  # (l)(m) os achados de 2026-10-07 (sinal de um adotante), cobrados NA SEÇÃO que os decide:
+  # o layout padrão não tem `In Progress` e o terminal sai por `completion_percentage:100`; a data do
+  # milestone é `MM-DD-AAAA`, não ISO. Sem isto o /engineer:work volta a pedir ao humano que mude o status.
+  local _s_st; _s_st="$(_zoho_sec 'updateStatus')"
+  if grep -qF '"completion_percentage":100' <<< "${_s_st}" && grep -qF 'Open' <<< "${_s_st}"; then
+    record_pass "zoho-adapter: (l) updateStatus diz o caminho do layout padrão (Open + completion_percentage, 100 fecha)"
+  else record_fail "zoho-adapter: (l)" "a seção do updateStatus não traz \`{\"completion_percentage\":100}\` — no layout padrão não há In Progress e o terminal só sai por aí"; fi
+  local _s_ms; _s_ms="$(_zoho_sec 'milestone')"
+  if grep -qF '"start_date":"10-07-2026"' <<< "${_s_ms}" && grep -qF 'PATTERN_NOT_MATCHED' <<< "${_s_ms}"; then
+    record_pass "zoho-adapter: (m) criar milestone usa a data do portal (MM-DD-AAAA), com o 400 do ISO escrito"
+  else record_fail "zoho-adapter: (m)" "a seção de milestone não mostra a data no formato do portal — ISO-8601 dá 400 PATTERN_NOT_MATCHED"; fi
+  if grep -qF 'zoho-token.sh' "${ad}"; then
+    record_pass "zoho-adapter: (n) o adapter aponta o helper de token com cache (emitir por chamada bloqueia o client)"
+  else record_fail "zoho-adapter: (n)" "o adapter não cita zoho-token.sh — o reuso do token volta a ser conselho"; fi
+  # (o) createTask manda o DONO na criação, na forma aninhada (sinal de campo 2026-10-07: 16 tasks
+  #     nasceram "Unassigned User" porque a seção de criação não falava do campo).
+  local _s_ct; _s_ct="$(_zoho_sec 'createTask\\(input\\)')"
+  if grep -qF '"owners_and_work":{"owners":[{"zpuid":' <<< "${_s_ct}"; then
+    record_pass "zoho-adapter: (o) createTask manda owners_and_work aninhado NA CRIAÇÃO (task não nasce sem dono)"
+  else record_fail "zoho-adapter: (o)" "a seção createTask não mostra \`owners_and_work\` aninhado no POST — a task nasce Unassigned"; fi
+
   # (f) createSubtask usa o vínculo ANINHADO. A guarda cobra a FORMA, e a razão é a história deste
   # caso: em 2026-09-30 ele mudou DUAS vezes num dia. Primeiro cobrava "V2 + 2026-12-31", canonizando
   # a promessa falsa de que a V2 entregava subtask (aceitei um 201 sem abrir o corpo). Depois cobrava
@@ -22628,6 +23341,194 @@ _family run_hook_chain_order_selftests
 _family run_corpus_grep_selftests
 _family run_research_workflow_selftests
 
+# kg-contract-check — o escritor de grafo julga o próprio arquivo contra o contrato v3 vendorizado ANTES
+# do commit (o gate do CI só vê arquivo rastreado). Nasceu do SAC-71 (2026-10-08): o grafo novo saía com
+# data sem aspas, confirmed sem provenance e label longo, e foi curado à mão no #967 e no #968.
+_kcc_graph() {
+  printf 'meta:\n  id: %s\n  schema_version: "1"\n  baseline: "2026-10-08"\nnodes:\n' "$1"
+  printf '  - id: Q_A\n    node_type: question\n    plane: DEV\n    status: open\n    impact: 3\n    confidence: 0.5\n    label: "pergunta A"\n'
+  printf '  - id: E_A\n    node_type: evidence\n    plane: DEV\n    status: confirmed\n    impact: 3\n    confidence: 0.9\n    verified_at: "2026-10-08"\n    label: "evidência A"\n'
+  printf '    provenance:\n      source: "caminho@commit"\n      locator: "linha 1"\n      method: "medição: comando de prova"\n'
+  printf 'edges:\n  - from: E_A\n    to: Q_A\n    edge_type: SUPPORTS\n'
+}
+run_kg_contract_check_selftests() {
+  local chk="${REPO_ROOT}/.claude/validation/kg-contract-check.sh" ven="${REPO_ROOT}/vendor/kg-ssot"
+  if [ ! -f "${chk}" ] || [ ! -f "${ven}/tools/kg_gate.py" ]; then record_fail "kg-contract-check" "checador ou vendor ausente"; return; fi
+  python3 -c 'import yaml, jsonschema' >/dev/null 2>&1 || { record_skip "kg-contract-check: PyYAML/jsonschema ausentes (SUT não exercido)"; return; }
+  local sb out rc long
+  sb="$(TMPDIR=/tmp mktemp -d)"
+  mkdir -p "${sb}/.claude/validation" "${sb}/vendor" "${sb}/g"
+  cp "${chk}" "${sb}/.claude/validation/"; cp -a "${ven}" "${sb}/vendor/"
+  _kcc_graph limpo > "${sb}/g/limpo.kg.yaml"
+  _kcc_graph divida | sed -e 's/verified_at: "2026-10-08"/verified_at: 2026-10-08/' > "${sb}/g/divida.kg.yaml"
+  ( cd "${sb}" && git init -q -b main && git add -A && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1 \
+    || { record_skip "kg-contract-check: git init falhou"; rm -rf "${sb}"; return; }
+  # (a) grafo NOVO conforme → rc 0
+  _kcc_graph novo > "${sb}/g/novo.kg.yaml"
+  if out="$(cd "${sb}" && bash .claude/validation/kg-contract-check.sh g/novo.kg.yaml 2>&1)"; then rc=0; else rc=$?; fi
+  if [ "${rc}" -eq 0 ]; then record_pass "kg-contract-check: (a) grafo novo conforme ao v3 → rc 0"
+  else record_fail "kg-contract-check: (a)" "grafo novo conforme reprovado rc=${rc}: ${out}"; fi
+  # (b) grafo NOVO com confirmed sem provenance → rc 1 nomeando o código
+  _kcc_graph semprov | sed -e '/provenance:/,/method:/d' > "${sb}/g/semprov.kg.yaml"
+  if out="$(cd "${sb}" && bash .claude/validation/kg-contract-check.sh g/semprov.kg.yaml 2>&1)"; then rc=0; else rc=$?; fi
+  if [ "${rc}" -eq 1 ] && grep -q 'form.required.node.provenance' <<< "${out}"; then
+    record_pass "kg-contract-check: (b) grafo novo com confirmed sem provenance → rc 1 nomeando o código"
+  else record_fail "kg-contract-check: (b)" "esperava rc 1 com provenance: rc=${rc} ${out}"; fi
+  # (c) grafo RASTREADO com dívida herdada (data sem aspas desde a base), mexido sem piorar → rc 0
+  sed -i 's/label: "pergunta A"/label: "pergunta A, revista"/' "${sb}/g/divida.kg.yaml"
+  if out="$(cd "${sb}" && bash .claude/validation/kg-contract-check.sh g/divida.kg.yaml 2>&1)"; then rc=0; else rc=$?; fi
+  if [ "${rc}" -eq 0 ]; then record_pass "kg-contract-check: (c) grafo rastreado com dívida herdada e sem piora → rc 0"
+  else record_fail "kg-contract-check: (c)" "dívida herdada cobrada como nova: rc=${rc} ${out}"; fi
+  # (d) grafo RASTREADO que ganha código novo (label acima de 280) → rc 1
+  long="$(printf 'x%.0s' $(seq 1 300))"
+  sed -i "s/label: \"evidência A\"/label: \"${long}\"/" "${sb}/g/limpo.kg.yaml"
+  if out="$(cd "${sb}" && bash .claude/validation/kg-contract-check.sh g/limpo.kg.yaml 2>&1)"; then rc=0; else rc=$?; fi
+  if [ "${rc}" -eq 1 ] && grep -q 'form.range.node.label' <<< "${out}"; then
+    record_pass "kg-contract-check: (d) grafo rastreado que passa a ter label longo → rc 1"
+  else record_fail "kg-contract-check: (d)" "piora no rastreado não acusada: rc=${rc} ${out}"; fi
+  # (f) o checador NÃO deixa bytecode no vendor. Medido em 2026-10-08: rodar o leitor de referência sem -B
+  #     plantava tools/__pycache__/*.pyc, e o `kg_vendor.py check` seguinte reprovava o vendor como
+  #     "divergente da tag" (o check rejeita bytecode de propósito). Rodamos sem PYTHONDONTWRITEBYTECODE,
+  #     como uma sessão comum roda.
+  if [ -z "$(find "${sb}/vendor/kg-ssot" -name '__pycache__' -o -name '*.pyc' 2>/dev/null)" ]; then
+    record_pass "kg-contract-check: (f) o checador não planta bytecode no vendor (o check do vendor segue íntegro)"
+  else record_fail "kg-contract-check: (f)" "bytecode plantado no vendor: $(find "${sb}/vendor/kg-ssot" -name '*.pyc' | head -2)"; fi
+  # (e) sem vendor → rc 2, nunca verde
+  rm -rf "${sb}/vendor/kg-ssot"
+  if out="$(cd "${sb}" && bash .claude/validation/kg-contract-check.sh g/novo.kg.yaml 2>&1)"; then rc=0; else rc=$?; fi
+  if [ "${rc}" -eq 2 ]; then record_pass "kg-contract-check: (e) sem o vendor do contrato → rc 2 (não julga, não passa)"
+  else record_fail "kg-contract-check: (e)" "sem vendor saiu rc=${rc}"; fi
+  rm -rf "${sb}"
+}
+_family run_kg_contract_check_selftests
+
+# Modo kg-migrate-v3 — SAC-73 parte 1: a ferramenta de migração do corpus ao contrato v3
+# (.claude/utils/kg/kg-migrate-v3.py) cita datas, deriva provenance SÓ de fonte que o nó já traz,
+# nunca corta label, --check não escreve, e a 2ª aplicação é no-op. O risco que a família vigia é a
+# ferramenta INVENTAR proveniência ou mudar significado — por isso (c) e (d) são os casos centrais.
+_kmv_graph() {
+  cat <<'KG'
+meta:
+  id: kmv
+  schema_version: "1"
+  baseline: 2026-10-08
+  review_after: 2026-11-07   # comentário preservado
+nodes:
+  - id: Q_A
+    node_type: question
+    plane: DEV
+    status: open
+    impact: 3
+    confidence: 0.5
+    label: "pergunta A"
+  - id: E_COM_TRACE
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 3
+    confidence: 0.9
+    verified_at: 2026-10-08
+    verified_against: "medição X no commit abc"
+    trace: "ops/algum-script.sh"
+    label: "evidência com trace"
+  - id: E_COM_URL
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 3
+    confidence: 0.9
+    verified_at: 2026-10-08
+    valid_from: 2026
+    verified_against: "lido em https://exemplo.org/doc#sec-2 em 2026-10-08"
+    label: "evidência com URL"
+  - id: E_SEM_FONTE
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 3
+    confidence: 0.9
+    verified_at: 2026-10-08
+    verified_against: "conversa com o maestro"
+    label: "evidência sem fonte verificável"
+  - id: E_LONGO
+    node_type: evidence
+    plane: DEV
+    status: open
+    impact: 2
+    confidence: 0.5
+    label: "LONGO_INICIO xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx LONGO_FIM"
+edges:
+  - from: E_COM_TRACE
+    to: Q_A
+    edge_type: SUPPORTS
+  - from: E_COM_URL
+    to: Q_A
+    edge_type: SUPPORTS
+  - from: E_SEM_FONTE
+    to: Q_A
+    edge_type: SUPPORTS
+  - from: E_LONGO
+    to: Q_A
+    edge_type: SUPPORTS
+KG
+}
+run_kg_migrate_v3_selftests() {
+  local tool="${REPO_ROOT}/.claude/utils/kg/kg-migrate-v3.py"
+  [ -f "${tool}" ] || { record_fail "kg-migrate-v3" "ferramenta ausente: ${tool}"; return; }
+  python3 -c 'import yaml' >/dev/null 2>&1 || { record_skip "kg-migrate-v3: PyYAML ausente (SUT não exercido)"; return; }
+  local d out rc g y h1 h2
+  d="$(TMPDIR=/tmp mktemp -d)"; g="${d}/g.kg.yaml"
+  _kmv_graph > "${g}"
+  # (e) --check: rc 1 com mudança pendente e o arquivo intacto
+  h1="$(sha256sum "${g}" | cut -d' ' -f1)"
+  if out="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${tool}" --check "${g}" 2>&1)"; then rc=0; else rc=$?; fi
+  h2="$(sha256sum "${g}" | cut -d' ' -f1)"
+  if [ "${rc}" -eq 1 ] && [ "${h1}" = "${h2}" ] && grep -q 'PENDENTE' <<< "${out}"; then
+    record_pass "kg-migrate-v3: (e) --check acusa a mudança pendente (rc 1) e não escreve nada"
+  else record_fail "kg-migrate-v3: (e)" "--check rc=${rc}, arquivo mudou=$([ "${h1}" = "${h2}" ] && echo não || echo SIM): ${out}"; fi
+  # aplica
+  if out="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${tool}" "${g}" 2>&1)"; then rc=0; else rc=$?; fi
+  y="$(python3 -I -B -c 'import json,sys,yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1])), default=str))' "${g}" 2>&1)" || true
+  # (a) datas entre aspas, inclusive o valid_from inteiro; o comentário do meta sobrevive
+  if [ "${rc}" -eq 0 ] && grep -q '^  baseline: "2026-10-08"$' "${g}" && grep -q '    valid_from: "2026"$' "${g}" \
+     && grep -q 'review_after: "2026-11-07"   # comentário preservado' "${g}"; then
+    record_pass "kg-migrate-v3: (a) datas sem aspas ganham aspas (valid_from inteiro vira \"2026\") e o comentário fica"
+  else record_fail "kg-migrate-v3: (a)" "datas não citadas: rc=${rc} ${out}"; fi
+  # (b) provenance derivada do trace, com o método declarando a derivação
+  if python3 -I -B -c 'import json,re,sys; g=json.loads(sys.argv[1]); n={x["id"]:x for x in g["nodes"]}; p=n["E_COM_TRACE"]["provenance"]; assert p["source"]=="ops/algum-script.sh" and p["locator"]=="medição X no commit abc" and re.match(r"derivado: \S", p["method"])' "${y}" 2>/dev/null; then
+    record_pass "kg-migrate-v3: (b) provenance derivada do trace do nó, locator = verified_against, method na forma canônica 'derivado: …' (contrato v4)"
+  else record_fail "kg-migrate-v3: (b)" "provenance do trace ausente/errada: ${y}"; fi
+  # (c2) sem trace, fonte = URL citada no verified_against
+  if python3 -I -B -c 'import json,sys; g=json.loads(sys.argv[1]); n={x["id"]:x for x in g["nodes"]}; assert n["E_COM_URL"]["provenance"]["source"]=="https://exemplo.org/doc#sec-2"' "${y}" 2>/dev/null; then
+    record_pass "kg-migrate-v3: (c2) sem trace, a fonte é a URL que o próprio verified_against cita"
+  else record_fail "kg-migrate-v3: (c2)" "fonte por URL não derivada: ${y}"; fi
+  # (c) sem fonte verificável: NADA de provenance inventada, e o nó sai no relatório
+  if python3 -I -B -c 'import json,sys; g=json.loads(sys.argv[1]); n={x["id"]:x for x in g["nodes"]}; assert "provenance" not in n["E_SEM_FONTE"]' "${y}" 2>/dev/null \
+     && grep -q 'SEM FONTE RECUPERÁVEL.*E_SEM_FONTE' <<< "${out}"; then
+    record_pass "kg-migrate-v3: (c) nó sem fonte verificável NÃO ganha provenance inventada — sai como SEM FONTE RECUPERÁVEL"
+  else record_fail "kg-migrate-v3: (c)" "proveniência inventada ou nó escondido: ${out} ${y}"; fi
+  # (d) label longo: texto intacto, só reportado
+  if grep -q 'LONGO_INICIO x.* LONGO_FIM"$' "${g}" && grep -q 'label longo.*E_LONGO' <<< "${out}"; then
+    record_pass "kg-migrate-v3: (d) label acima de 280 fica intacto e é só reportado (separar fato e narrativa é decisão humana)"
+  else record_fail "kg-migrate-v3: (d)" "label longo alterado ou não reportado: ${out}"; fi
+  # (f) idempotência: 2ª aplicação não muda nada e o --check sai 0
+  h1="$(sha256sum "${g}" | cut -d' ' -f1)"
+  PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${tool}" "${g}" >/dev/null 2>&1 || true
+  h2="$(sha256sum "${g}" | cut -d' ' -f1)"
+  if out="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${tool}" --check "${g}" 2>&1)"; then rc=0; else rc=$?; fi
+  if [ "${h1}" = "${h2}" ] && [ "${rc}" -eq 0 ] && grep -q 'nada a migrar' <<< "${out}"; then
+    record_pass "kg-migrate-v3: (f) idempotente — a 2ª aplicação não muda nada e o --check sai 0"
+  else record_fail "kg-migrate-v3: (f)" "não idempotente: mudou=$([ "${h1}" = "${h2}" ] && echo não || echo SIM) rc=${rc} ${out}"; fi
+  # (g) YAML inválido de entrada → rc 2 sem tocar
+  printf 'meta:\n  id: x\n nodes: [\n' > "${d}/bad.kg.yaml"; h1="$(sha256sum "${d}/bad.kg.yaml" | cut -d' ' -f1)"
+  if out="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${tool}" "${d}/bad.kg.yaml" 2>&1)"; then rc=0; else rc=$?; fi
+  h2="$(sha256sum "${d}/bad.kg.yaml" | cut -d' ' -f1)"
+  if [ "${rc}" -eq 2 ] && [ "${h1}" = "${h2}" ]; then record_pass "kg-migrate-v3: (g) YAML inválido na entrada → rc 2 e nada gravado"
+  else record_fail "kg-migrate-v3: (g)" "rc=${rc} mudou=$([ "${h1}" = "${h2}" ] && echo não || echo SIM)"; fi
+  rm -rf "${d}"
+}
+_family run_kg_migrate_v3_selftests
+
 # Modo kg-scope — --scope do gate (insumo do /meta:kg backfill); protege a catraca canônica.
 _family run_kg_scope_selftests
 
@@ -22921,6 +23822,77 @@ run_member_registered_selftests() {
   rm -rf "${d}"
 }
 _family run_member_registered_selftests
+
+# ── zoho-token.sh: o token do Zoho é REUSADO, não emitido por chamada (2026-10-07) ─────────────────
+# POR QUE EXISTE: um adotante que pedia token novo a cada chamada levou `Access Denied` do accounts.zoho
+# depois de ~30 emissões e ficou ~5 min sem operar. (a) é o caso medido: duas chamadas, UMA emissão.
+# (b) expirado renova; (c) o cache é 600; (d) emissão recusada não grava nada e não vaza o segredo;
+# (e) o segredo nunca vai na linha de comando do curl; (f) escopo diferente é cache diferente.
+# O `curl` é esboçado (o SUT fala com a rede) e CONTA as emissões. MUTANTE: tirar o ramo CACHE-HIT
+# reprova (a) — é o próprio defeito do adotante.
+run_zoho_token_selftests() {
+  local sut="${REPO_ROOT}/.claude/utils/task-manager/zoho-token.sh"
+  if [ ! -f "${sut}" ]; then record_fail "zoho-token" "SUT ausente: ${sut}"; return; fi
+  local d; d="$(mktemp -d)"; mkdir -p "${d}/bin" "${d}/cache"
+  cat > "${d}/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${ZT_ARGV}"; cat > /dev/null
+case "$*" in *oauth/v2/token*) ;; *) echo '{"portals":[{"id":"777","name":"p"}]}'; exit 0 ;; esac
+n=$(cat "${ZT_COUNT}" 2>/dev/null || echo 0); echo $((n+1)) > "${ZT_COUNT}"
+if [ -n "${ZT_DENY:-}" ]; then echo '{"error":"Access Denied","error_description":"too many"}'; exit 0; fi
+echo "{\"access_token\":\"1000.tok$((n+1))\",\"token_type\":\"Bearer\",\"expires_in\":${ZT_TTL:-3600}}"
+STUB
+  chmod +x "${d}/bin/curl"
+  local SECRET="segredo-que-nao-pode-vazar-$$"
+  _zt() { PATH="${d}/bin:${PATH}" ZT_COUNT="${d}/n" ZT_ARGV="${d}/argv" ONION_ZOHO_TOKEN_CACHE_DIR="${d}/cache" \
+          ZOHO_CLIENT_ID=1000.cliente ZOHO_CLIENT_SECRET="${SECRET}" bash "${2:-${sut}}" ${1:+--scope "$1"}; }
+  local t1 t2 n
+  echo 0 > "${d}/n"; : > "${d}/argv"
+  t1="$(_zt '' 2>/dev/null)"; t2="$(_zt '' 2>/dev/null)"; n="$(cat "${d}/n")"
+  if [ "${n}" = 1 ] && [ -n "${t1}" ] && [ "${t1}" = "${t2}" ]; then
+    record_pass "zoho-token: (a) duas chamadas ⇒ UMA emissão, mesmo token (o Access Denied de 2026-10-07)"
+  else record_fail "zoho-token: (a) emitiu por chamada" "emissões=${n} t1=${t1} t2=${t2}"; fi
+
+  local f; f="$(ls "${d}/cache"/zoho-token-* 2>&1 | grep -v '\.lock$' | head -1)"
+  if [ -f "${f}" ] && [ "$(stat -c %a "${f}" 2>/dev/null || stat -f %Lp "${f}")" = 600 ]; then
+    record_pass "zoho-token: (c) o cache é 600"
+  else record_fail "zoho-token: (c) permissão do cache" "arquivo=${f} modo=$(stat -c %a "${f}" 2>&1)"; fi
+
+  printf '%s %s\n' "$(( $(date +%s) + 60 ))" "1000.velho" > "${f}"   # dentro da margem de 300 s
+  t2="$(_zt '' 2>/dev/null)"; n="$(cat "${d}/n")"
+  if [ "${n}" = 2 ] && [ "${t2}" != "1000.velho" ]; then
+    record_pass "zoho-token: (b) token a 60 s de expirar ⇒ renova (margem), não devolve o velho"
+  else record_fail "zoho-token: (b) não renovou" "emissões=${n} token=${t2}"; fi
+
+  _zt 'ZohoProjects.portals.READ' >/dev/null 2>&1; n="$(cat "${d}/n")"
+  if [ "${n}" = 3 ]; then record_pass "zoho-token: (f) escopo diferente ⇒ cache diferente (leitura não serve a escrita)"
+  else record_fail "zoho-token: (f)" "emissões=${n} (esperado 3)"; fi
+
+  local out rc; rm -f "${d}/cache"/zoho-token-*
+  rc=0; out="$(ZT_DENY=1 _zt '' 2>&1)" || rc=$?
+  if [ "${rc}" -eq 1 ] && grep -q 'Access Denied' <<< "${out}" && ! grep -qF "${SECRET}" <<< "${out}" \
+     && [ -z "$(ls "${d}/cache"/zoho-token-* 2>/dev/null | grep -v '\.lock$')" ]; then
+    record_pass "zoho-token: (d) emissão recusada ⇒ rc=1 com o motivo, nada no cache, segredo fora da saída"
+  else record_fail "zoho-token: (d)" "rc=${rc} out=${out}"; fi
+
+  if ! grep -qF "${SECRET}" "${d}/argv"; then
+    record_pass "zoho-token: (e) o segredo nunca vai na linha de comando do curl (entrada padrão, -K -)"
+  else record_fail "zoho-token: (e) segredo no argv do curl" "$(cat "${d}/argv")"; fi
+
+  # (g) o CONSUMIDOR real: `env-check.sh --test zoho` passa pelo helper — dois testes, uma emissão.
+  local ec="${REPO_ROOT}/.claude/utils/task-manager/env-check.sh"
+  printf 'TASK_MANAGER_PROVIDER=zoho\nZOHO_CLIENT_ID=1000.cliente\nZOHO_CLIENT_SECRET=%s\nZOHO_PORTAL_ID=777\n' "${SECRET}" > "${d}/env.fixture"
+  echo 0 > "${d}/n"; rm -f "${d}/cache"/zoho-token-*
+  local o1 o2
+  o1="$(PATH="${d}/bin:${PATH}" ZT_COUNT="${d}/n" ZT_ARGV="${d}/argv" ONION_ZOHO_TOKEN_CACHE_DIR="${d}/cache" bash "${ec}" --env "${d}/env.fixture" --test zoho 2>&1)"
+  o2="$(PATH="${d}/bin:${PATH}" ZT_COUNT="${d}/n" ZT_ARGV="${d}/argv" ONION_ZOHO_TOKEN_CACHE_DIR="${d}/cache" bash "${ec}" --env "${d}/env.fixture" --test zoho 2>&1)"
+  n="$(cat "${d}/n")"
+  if [ "${n}" = 1 ] && grep -q 'conexão OK' <<< "${o1}" && grep -q 'conexão OK' <<< "${o2}" && ! grep -qF "${SECRET}" <<< "${o1}${o2}"; then
+    record_pass "zoho-token: (g) env-check --test zoho usa o helper — dois testes, UMA emissão, segredo fora da saída"
+  else record_fail "zoho-token: (g) env-check emite por conta própria" "emissões=${n} o1=${o1} o2=${o2}"; fi
+  rm -rf "${d}"; unset -f _zt
+}
+_family run_zoho_token_selftests
 # ── remeasure-hard.sh: o relatório do --update cita HARD MEDIDO, nunca lembrado (2026-10-07) ──────
 # (a) e (d) são as polaridades; (b) é o caso medido (o relatório disse 0 e havia 1); (c) é o fail-open
 # que o helper existe para não ter: lint QUEBRADO não é "0 HARD". MUTANTE: tirar o teste
@@ -22989,6 +23961,11 @@ run_radar_aufhebung_selftests() {
   # (d) a UNICA forma expressavel de Aufhebung cross-file — a aresta do motor e INTRA-arquivo, e o
   #     /meta:radar manda grafo PROPRIO por rodada. Sem este caso a guarda pune quem obedece.
   _r89 e  '  supersedes_external: "outro.kg.yaml#E_VELHO"' ""; _esp e 0 "(d) supersedes_external conta (a aresta nao cruza arquivo)"
+  # (d2) a forma de EXTENSAO do contrato v3 do .kg.yaml (chave com prefixo x_). Medido em 2026-10-08: o
+  #      contrato acusa `meta.supersedes_external` como chave desconhecida (SHOULD) e o gate por grafo do CI
+  #      reprova grafo NOVO que suba essa divida — toda rodada de radar nova reprovava. A guarda aceita as duas.
+  _r89 e2 '  x_supersedes_external: "outro.kg.yaml#E_VELHO"' ""; _esp e2 0 "(d2) x_supersedes_external (extensao do contrato v3) conta"
+  _r89 e3 '  x_supersedes_none: a razao real' ""; _esp e3 0 "(d3) x_supersedes_none (extensao do contrato v3) conta"
 
   # (e) FAIL-OPEN provado no grafo REAL: bastava a PALAVRA para calar a guarda. Tres formas vazias.
   _r89 f1 '  supersedes_none:'                 ""            ; _esp f1 1 "(e1) supersedes_none VAZIO NAO cala a guarda"
@@ -23323,6 +24300,95 @@ _family run_cited_directive_selftests
 _family run_evolve_staleness_selftests
 _family run_evolve_census_selftests
 _family run_evolve_workflow_selftests
+
+# cc-delta-census — o MEDIDOR do /meta:cc-update (peça 3). Nasceu em 2026-10-08 da rodada r8 do radar E3,
+# feita à mão: o delta foi separado por um python avulso e três ligações item↔Onion afirmadas sem medição
+# foram reprovadas pelo juiz. A família vigia o que o medidor PROMETE (só o delta, nada-a-medir, rc 2
+# nomeado sem fonte, hook sem onFailure contado, esqueleto conforme) — e é sem rede: CHANGELOG de fixture.
+_ccd_changelog() {
+  printf '# Changelog\n\n'
+  printf '## 1.0.4\n\n- item quatro\n\n'
+  printf '## 1.0.3\n\n- item tres a\n- item tres b citando claude-zeta-9\n\n'
+  printf '## 1.0.2\n\n- item dois\n\n'
+  printf '## 1.0.1\n\n- item um\n\n'
+  printf '## 1.0.0\n\n- item zero\n'
+}
+run_cc_delta_census_selftests() {
+  local sut="${REPO_ROOT}/.claude/validation/cc-delta-census.sh"
+  [ -f "${sut}" ] || { record_fail "cc-delta-census" "medidor ausente: ${sut}"; return; }
+  command -v python3 >/dev/null 2>&1 || { record_skip "cc-delta-census: python3 ausente (SUT não exercido)"; return; }
+  local sb out rc g
+  sb="$(TMPDIR=/tmp mktemp -d)"
+  mkdir -p "${sb}/r/.claude" "${sb}/r/docs/onion" "${sb}/w"
+  _ccd_changelog > "${sb}/CHANGELOG.md"
+  printf 'axes:\n  - id: E3-claude-code-delta\n    cc_version: "1.0.1"\n    kg: docs/evolution/research/radar-E3-2026-10-05-r7/radar-E3-2026-10-05-r7.kg.yaml\n  - id: E6-outro\n    cc_version: "9.9.9"\n' > "${sb}/r/docs/onion/radar-baselines.yaml"
+  printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"bash .claude/hooks/veto-a.sh"},{"type":"command","command":"bash .claude/hooks/veto-b.sh","onFailure":"block"}]}]}}\n' > "${sb}/r/.claude/settings.json"
+  # (a) baseline 1.0.1 (lida do eixo E3, não do E6) e disco 1.0.3 → extrai SÓ 1.0.2 e 1.0.3, byte a byte
+  if out="$(CC_DELTA_CHANGELOG="${sb}/CHANGELOG.md" CC_DELTA_DISK=1.0.3 CC_DELTA_PROC= CC_DELTA_TODAY=2026-10-08 \
+       bash "${sut}" "${sb}/r" --markdown --write "${sb}/w/radar-E3-2026-10-08-r9" 2>&1)"; then rc=0; else rc=$?; fi
+  if [ "${rc}" -eq 0 ] && grep -q 'DELTA 2 versão(ões): 1.0.2 a 1.0.3' <<< "${out}" \
+     && [ "$(ls "${sb}/w/radar-E3-2026-10-08-r9/data" 2>/dev/null | tr '\n' ' ')" = "1.0.2.txt 1.0.3.txt " ] \
+     && [ "$(cat "${sb}/w/radar-E3-2026-10-08-r9/data/1.0.2.txt")" = "$(printf '## 1.0.2\n\n- item dois\n')" ]; then
+    record_pass "cc-delta-census: (a) extrai só o delta entre as duas versões (nem a baseline nem a posterior à instalada)"
+  else record_fail "cc-delta-census: (a)" "rc=${rc} data=$(ls "${sb}/w/radar-E3-2026-10-08-r9/data" 2>/dev/null | tr '\n' ' ') $(_emit "${out}" | head -3 | tr '\n' ' ')"; fi
+  # (b) instalada = baseline → NADA A MEDIR, rc 0, e nenhuma rodada escrita
+  if out="$(CC_DELTA_CHANGELOG="${sb}/CHANGELOG.md" CC_DELTA_DISK=1.0.1 CC_DELTA_PROC= \
+       bash "${sut}" "${sb}/r" --markdown --write "${sb}/w/igual" 2>&1)"; then rc=0; else rc=$?; fi
+  if [ "${rc}" -eq 0 ] && grep -q 'VEREDITO: NADA A MEDIR' <<< "${out}" && [ -z "$(ls "${sb}/w/igual/data" 2>/dev/null)" ] \
+     && [ ! -e "${sb}/w/igual/igual.kg.yaml" ]; then
+    record_pass "cc-delta-census: (b) versões iguais → NADA A MEDIR, rc 0, sem rodada escrita"
+  else record_fail "cc-delta-census: (b)" "rc=${rc} $(_emit "${out}" | head -3 | tr '\n' ' ')"; fi
+  # (c) CHANGELOG ausente → rc 2 nomeado
+  if out="$(CC_DELTA_CHANGELOG="${sb}/nao-existe.md" CC_DELTA_DISK=1.0.3 CC_DELTA_PROC= bash "${sut}" "${sb}/r" 2>&1)"; then rc=0; else rc=$?; fi
+  if [ "${rc}" -eq 2 ] && grep -q 'CHANGELOG vazio ou ausente' <<< "${out}"; then
+    record_pass "cc-delta-census: (c) CHANGELOG ausente → rc 2 nomeando a falta"
+  else record_fail "cc-delta-census: (c)" "rc=${rc} $(_emit "${out}" | head -2 | tr '\n' ' ')"; fi
+  # (c2) fonte inalcançável (offline) → rc 2 que DECLARA a lacuna, nunca delta inventado
+  if out="$(CC_DELTA_URL="file://${sb}/nao-existe.md" CC_DELTA_DISK=1.0.3 CC_DELTA_PROC= bash "${sut}" "${sb}/r" 2>&1)"; then rc=0; else rc=$?; fi
+  if [ "${rc}" -eq 2 ] && grep -q 'inalcançável' <<< "${out}"; then
+    record_pass "cc-delta-census: (c2) fonte inalcançável → rc 2 que declara a lacuna"
+  else record_fail "cc-delta-census: (c2)" "rc=${rc} $(_emit "${out}" | head -2 | tr '\n' ' ')"; fi
+  # (g) e a mesma saída NOMEIA o override: no 1º dogfood de carga um CC_DELTA_URL herdado de teste fez a
+  #     sessão ler "fonte fora do ar" quando a causa era a variável
+  if grep -q 'override ativo.*CC_DELTA_URL=file://' <<< "${out}"; then
+    record_pass "cc-delta-census: (g) override ativo é declarado junto do erro (a causa não fica parecendo a fonte)"
+  else record_fail "cc-delta-census: (g)" "override não declarado: $(_emit "${out}" | head -2 | tr '\n' ' ')"; fi
+  # (c3) baseline fora do CHANGELOG → rc 2 (o delta seria chute)
+  if out="$(CC_DELTA_CHANGELOG="${sb}/CHANGELOG.md" CC_DELTA_BASELINE=0.9.9 CC_DELTA_DISK=1.0.3 CC_DELTA_PROC= bash "${sut}" "${sb}/r" 2>&1)"; then rc=0; else rc=$?; fi
+  if [ "${rc}" -eq 2 ] && grep -q 'não está no CHANGELOG' <<< "${out}"; then
+    record_pass "cc-delta-census: (c3) baseline fora do CHANGELOG → rc 2"
+  else record_fail "cc-delta-census: (c3)" "rc=${rc} $(_emit "${out}" | head -2 | tr '\n' ' ')"; fi
+  # (d) o inventário conta o hook SEM onFailure (veto-a) e não o que declara block (veto-b)
+  if out="$(CC_DELTA_CHANGELOG="${sb}/CHANGELOG.md" CC_DELTA_DISK=1.0.3 CC_DELTA_PROC= bash "${sut}" "${sb}/r" --tsv 2>&1)"; then rc=0; else rc=$?; fi
+  if [ "${rc}" -eq 0 ] && grep -q "^hooks$(printf '\t')2$(printf '\t')sem_onFailure$(printf '\t')1\$" <<< "${out}"; then
+    record_pass "cc-delta-census: (d) inventário acusa o hook sem onFailure (1 de 2)"
+  else record_fail "cc-delta-census: (d)" "rc=${rc} $(_emit "${out}" | grep '^hooks' | tr '\t' ' ')"; fi
+  # (h) guarda de DERIVA DE BINÁRIO listada (SAC-84, 2026-10-09): só a família que lê o claude instalado.
+  #     O fixture escreve `command -v %s` + claude para esta própria família não se auto-acusar no repo real.
+  mkdir -p "${sb}/r/.claude/validation"
+  printf 'run_le_binario_selftests() {\n  _b="$(command -v %s)"\n}\nrun_so_copia_selftests() {\n  :\n}\n' claude > "${sb}/r/.claude/validation/lint-selftest.sh"
+  if out="$(CC_DELTA_CHANGELOG="${sb}/CHANGELOG.md" CC_DELTA_DISK=1.0.3 CC_DELTA_PROC= bash "${sut}" "${sb}/r" --tsv 2>&1)"; then rc=0; else rc=$?; fi
+  if [ "${rc}" -eq 0 ] && [ "$(grep '^guarda_binario' <<< "${out}" | tr '\t' ' ')" = "guarda_binario le_binario" ]; then
+    record_pass "cc-delta-census: (h) lista a guarda de deriva de binário (e só ela) para a rodada rodar"
+  else record_fail "cc-delta-census: (h)" "rc=${rc} [$(grep '^guarda_binario' <<< "${out}" | tr '\t\n' ' ')]"; fi
+  # (f) o diretório da próxima rodada sai do `kg:` do eixo E3 (r7 → r8), não da memória de quem conduz
+  if out="$(CC_DELTA_CHANGELOG="${sb}/CHANGELOG.md" CC_DELTA_DISK=1.0.3 CC_DELTA_PROC= CC_DELTA_TODAY=2026-10-08 bash "${sut}" "${sb}/r" --tsv 2>&1)"; then rc=0; else rc=$?; fi
+  if [ "${rc}" -eq 0 ] && grep -q "^proxima_rodada$(printf '\t')docs/evolution/research/radar-E3-2026-10-08-r8/\$" <<< "${out}"; then
+    record_pass "cc-delta-census: (f) próxima rodada derivada da baseline (r7 → r8)"
+  else record_fail "cc-delta-census: (f)" "rc=${rc} $(_emit "${out}" | grep '^proxima_rodada' | tr '\t' ' ')"; fi
+  # (e) o ESQUELETO escrito em (a) passa no radar (--integrity --schema) e no contrato v3
+  g="${sb}/w/radar-E3-2026-10-08-r9/radar-E3-2026-10-08-r9.kg.yaml"
+  if [ ! -f "${g}" ]; then record_fail "cc-delta-census: (e)" "esqueleto não escrito em ${g}"
+  elif ! out="$(bash "${REPO_ROOT}/.claude/validation/kg-radar.sh" "${g}" --integrity --schema 2>&1)"; then
+    record_fail "cc-delta-census: (e)" "radar reprovou o esqueleto: $(_emit "${out}" | grep -m2 '✗' | tr '\n' ' ')"
+  elif ! python3 -c 'import yaml, jsonschema' >/dev/null 2>&1; then
+    record_skip "cc-delta-census: (e) contrato v3 — PyYAML/jsonschema ausentes (radar passou; contrato NÃO verificado)"
+  elif out="$(cd "${REPO_ROOT}" && bash .claude/validation/kg-contract-check.sh "${g}" 2>&1)"; then
+    record_pass "cc-delta-census: (e) o esqueleto passa no radar e no kg-contract-check (rc 0)"
+  else record_fail "cc-delta-census: (e)" "contrato v3 reprovou o esqueleto: $(_emit "${out}" | head -3 | tr '\n' ' ')"; fi
+  rm -rf "${sb}"
+}
+_family run_cc_delta_census_selftests
 
 
 

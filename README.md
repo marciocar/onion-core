@@ -10,8 +10,7 @@ cobre três dimensões peer do ciclo: produto, engenharia e compliance.
 
 ## O que está aqui, e o que não está
 
-**Está:** a maquinaria completa — `.claude/` (comandos, agentes, skills, hooks, utils, validation),
-as meta-specs e a knowledge base.
+**Está:** a maquinaria completa — `.claude/` (comandos, agentes, skills, hooks, utils, validation), as meta-specs e a knowledge base.
 
 **Não está, e é desenho:** a **biografia** do core — diário, análises, discussões, registro da
 federação e materiais. Método viaja; história, não. A allowlist que decide isso é
@@ -34,4 +33,4 @@ Depois, `/warm-up` para o contexto e `/onion` para a orientação. As guardas ro
 
 ---
 
-Materializado do core no pin `947e69ce069d` · papel `hub`.
+Materializado do core no pin `0bf23f0c7032` · papel `source`.

@@ -66,6 +66,50 @@ do `members.yaml` virou **cache**. Por isso a REGRA 85 (Porta pública espelha o
 informativa por inteiro e o workflow `onion-door-staleness` é relatório: a defasagem continua visível
 e nada mais fica bloqueado por ela.
 
+### 6. A versão é rótulo de release: o motor propõe, o maestro sela, a tag mora na porta
+Decisão do maestro de 2026-10-11 (nó `D_VERSIONAR_AS_PORTAS_POR_RELEASE`, por pergunta com opções).
+- **Rótulo, não verdade.** A versão `onion-vX.Y.Z` é apelido de um pin publicado. Nenhuma guarda a
+  lê: a REGRA 85 (Porta pública espelha o core, com catraca), a REGRA 92 (Papel da porta no registro
+  concorda com o CARIMBO dela) e o `--status` medem o pin, e o `--status` só **exibe** a versão lida do
+  carimbo remoto. Um pin que não é release tem a versão derivada no estilo `git describe`
+  (`onion-v1.0.0-31-g<sha>`), que nunca vira campo guardado no `members.yaml`.
+- **Toda publicação é uma release.** O `--push` exige `--version X.Y.Z`; sem ele, rc 2. O ensaio
+  mostra a **proposta** de bump. O motor a calcula pelo diff de superfície entre a porta publicada e a
+  montada: comando, agente, skill ou hook removido ou renomeado, ou chave do carimbo mudada, é
+  **major**; superfície adicionada é **minor**; o resto é **patch**. Uma entrada BREAKING no
+  CHANGELOG da federação desde a release anterior torna a proposta **candidata a major**. A proposta
+  não sai de Conventional Commits (medido em 2026-10-11: zero `!` em 2432 commits). A versão
+  selada tem de ser maior que a última tag da porta. Repetir o número de uma release já publicada só
+  passa como re-rodada idempotente, quando o conteúdo é o mesmo.
+- **A tag mora nas portas.** O motor cria a tag anotada `onion-vX.Y.Z` (com o nome do produto, como
+  `kg-ssot-vX.Y.Z`), empurra depois do ramo e a confere no remoto como confere o pin. O core privado
+  fica intocado, inclusive de tags, e o passo 8 confere isso. A porta `onion-core` (papel source) é o
+  livro-razão das releases.
+- **Número único da família, começando em 1.0.0.** Cada rodada lê as tags de **todas** as portas do
+  registro: a proposta parte do máximo da família, e o número selado tem de ser maior que ele. A
+  exceção é a mesma publicação: uma porta pode tomar um número que já existe noutra se for o **mesmo
+  pin** (é como as quatro saem da mesma release); em pin diferente, rc 2. Tags ilegíveis tornam a
+  proposta NÃO-MEDIDA, nunca "primeira release". O `--all` agrega as propostas (maior bump sobre o
+  máximo) e declara NÃO MEDIDA se alguma porta não chegou à proposta. Os plugins mantêm o `version` do `plugin.json` por conteúdo (é o que
+  dirige o update do Claude Code). A versão da família vai em `metadata.version` do `marketplace.json`
+  e em `onion_release` de cada `provenance.json`. Nas outras portas ela vai no carimbo (`release:`, pelo
+  `write-stamp.sh`).
+- **O changelog da release é a mensagem da tag**, gerada pelo motor. Ele compara a montagem com a
+  **tag anterior** desta porta (não com a ponta, para que a re-rodada que só recupera uma tag não grave
+  um changelog vazio). O intervalo de commits vai do `source_commit` do carimbo da tag anterior ao pin
+  novo, filtrado pelos caminhos que a porta mudou. **Os assuntos de commit não viajam**: a porta é sem
+  biografia, e um assunto é biografia do core, além de imutável (um só com nome de adotante travaria
+  toda release seguinte). Viaja a **contagem por tipo** Conventional, sem os `docs:`; o que mudou de
+  fato é a seção de superfície. A seção "Quebras nesta porta" diz **"nenhuma quebra nesta porta"**
+  quando ela não quebrou. Do CHANGELOG da federação só viaja a **contagem** de entradas BREAKING, nunca
+  o texto. O changelog passa pela **mesma** varredura de vazamento do bundle, porque assunto de
+  commit do core é superfície nova de vazamento.
+- **API pública por porta**, que é o que dá sentido ao "major": os comandos invocáveis, os agentes,
+  as skills e os hooks que a porta distribui (o manifesto do papel), o schema do carimbo e, na porta
+  source, o contrato do `members.yaml`.
+- **O canal do adotante não muda.** Quem adota recebe mudanças pelo CHANGELOG da federação e pelo
+  `/meta:co-announce`, não pelo changelog da porta.
+
 ## O destino (peça 5)
 
 O destino de uma publicação é o **carimbo publicado**, conferido no remoto. Não há `write(KG)` por
@@ -105,5 +149,20 @@ para que a ausência não seja lida como esquecimento.
 - **Não mede a defasagem por papel.** O `--status` conta os commits das raízes que viajam para
   qualquer papel; para standalone, plugins e mini ele pode contar commit que não chega nelas.
   Superestima, nunca subestima, e é informativo.
+- **Não mede todo o contrato que declara como API.** A proposta de bump lê nomes (arquivo
+  removido, renomeado ou adicionado na superfície) e as chaves do carimbo. Um comando reescrito com o
+  mesmo nome e outro comportamento sai como patch. O contrato do `members.yaml` da porta source não
+  entra no diff; o sinal dele é a entrada BREAKING no CHANGELOG da federação. Por isso a proposta é
+  proposta, e o número é do maestro.
+- **Não publica a família de forma atômica.** O `--all --push` publica porta a porta. Se uma reprovar,
+  as outras já saíram com o número. A cura é re-rodar com o **mesmo** `--version` depois da correção:
+  a porta que já está na release passa como re-rodada idempotente (ou só empurra a tag que faltou), e
+  a que faltava sai. A re-rodada noutro dia também passa: com o mesmo pin e a mesma release, o motor
+  confere que a única diferença é a linha `materialized_at` do carimbo e não a trata como conteúdo
+  novo; qualquer outra diferença (uma troca de papel, por exemplo) recusa com rc 2. Se `origin/main`
+  andou no meio, o `--expect-pin` recusa antes. Teto: com `--clone`, uma tag local que sobrou de uma
+  rodada anterior apontando outro commit faz a re-rodada sair rc 4 até ser apagada à mão.
+- **A versão derivada do `--status` é aproximação.** O `onion-vX-N-g<sha>` junta a tag da porta com
+  a contagem e o sha do core; não é o `git describe` de repositório nenhum. É só exibição.
 - **Não atualiza o clone local da porta nem o `members.yaml`.** A REGRA 92 lê o clone local, então
   depois de uma troca de papel ele precisa de `git pull` por quem o mantém.

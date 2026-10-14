@@ -32,7 +32,11 @@ Antes de qualquer commit no clone da porta, quatro conferências sobre o bundle:
   desenho (o ponto cego já medido duas vezes); e caminho de máquina `/home/<conta>/`, com a conta
   **derivada** dos `local_path` do registro e de quem roda. Lista de exemplos tolerados não entra:
   falharia pelo vocabulário. Todos os termos são derivados, porque nome escrito no script já seria o
-  vazamento;
+  vazamento. A varredura mora em `.claude/validation/door-leak-scan.sh`, e o lint roda o mesmo código
+  em todo PR, nas raízes que viajam: é a REGRA 106 (Superfície que viaja passa pela varredura de
+  vazamento da publicação). Ela existe porque, em 2026-10-13, dois ensaios na mesma noite reprovaram
+  três portas aqui no fim, por vazamento que tinha entrado com o lint verde. Agora o PR barra antes;
+  a varredura da publicação continua sendo a última rede;
 - **paridade de papel:** o carimbo montado diz o papel pedido e o pin de `origin/main`. Nos plugins, todo
   `provenance.json` aponta o pin;
 - **o gate da própria porta:** o lint dela tem de dar 0 HARD (o mini não leva lint, por desenho). Nos
@@ -64,7 +68,12 @@ O pin vive no `.claude/.onion-version` da porta (ou no `provenance.json`, nos pl
 materialização e lido do **remoto** por `--status`, com git puro e sem credencial. O `onion_version`
 do `members.yaml` virou **cache**. Por isso a REGRA 85 (Porta pública espelha o core, com catraca) é
 informativa por inteiro e o workflow `onion-door-staleness` é relatório: a defasagem continua visível
-e nada mais fica bloqueado por ela.
+e nada mais fica bloqueado por ela. Quem quiser o cache em dia roda, na fonte, o carimbador do cache
+(`door-seal-pin.sh <porta>`, core-only), que lê o carimbo **pela mesma leitura** do `--status` (uma lib
+só, a `door-published-stamp.sh`), nunca do clone local
+da porta, porque o motor publica de um clone descartável e o local fica para trás (medido em
+2026-10-14, PR #1100). O `--push` termina imprimindo esse comando; abrir o PR do cache é de quem roda,
+numa leva própria.
 
 ### 6. A versão é rótulo de release: o motor propõe, o maestro sela, a tag mora na porta
 Decisão do maestro de 2026-10-11 (nó `D_VERSIONAR_AS_PORTAS_POR_RELEASE`, por pergunta com opções).

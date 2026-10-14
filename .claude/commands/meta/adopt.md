@@ -138,8 +138,7 @@ fi
 
 Usado pela **Fase 3** (install) e pelo **`--update`** — re-aplica os passos install-only que **não** vêm
 na cópia de arquivos (registro de hooks + starter de co-evolução + proteção de formatador). Idempotente:
-re-rodar não duplica.
-Snippet self-contained (shell novo a cada fase).
+re-rodar não duplica. Snippet self-contained (shell novo a cada fase).
 
 ```bash
 SOURCE_ROOT="$(git rev-parse --show-toplevel)"
@@ -288,19 +287,21 @@ bash "$SOURCE_ROOT/.claude/utils/adopt/offer-onion-ci.sh" "$DEST" || true
 # ↑ rc≠0 aqui significa "lint do alvo reprovando" — NÃO aborta a adoção (o gate local de (6)
 #   já está vivo); é convite a consertar o lint e reofertar o CI depois.
 
-# (7) .gitattributes merge=union — reduz conflito ESPÚRIO no merge de vendor-branch (Achado #2) em
-#     arquivos append-only do doc-bridge (CHANGELOG/_processed): duas pontas apendam → união, não conflito.
-#     Never-clobber por-linha (idempotente): só adiciona as regras Onion ausentes.
+# (7) .gitattributes: eol=lf nos executáveis (SAC-107; never-clobber, desfechos no helper) e merge=union
+#     nos append-only do doc-bridge (CHANGELOG/_processed; Achado #2: duas pontas apendam → união). Idempotente.
+bash "$SOURCE_ROOT/.claude/utils/adopt/emit-eol-gitattributes.sh" "$DEST" --adopt
 for rule in 'docs/evolution/**/CHANGELOG.md merge=union' 'docs/evolution/**/_processed/** merge=union'; do
   grep -qxF "$rule" "$DEST/.gitattributes" 2>/dev/null || printf '%s\n' "$rule" >> "$DEST/.gitattributes"
 done
 
 # (8) SSOT inventory.md + graph.md — REGENERA do filesystem do alvo. As REGRAS 8 e 21 as exigem e o
 #     hook nativo recém-instalado bloqueia o 1º commit sem elas; sem regenerar, o --update as deixa
-#     STALE quando o framework muda contagens. Helper testável (família ssot_projections).
+#     STALE quando o framework muda contagens. Helper testável (família ssot_projections). GREENFIELD: com o índice vazio, testing-inventory/testing-state (REGRAS 80/81) saem vazios aqui; o durable-commit.sh re-roda o helper após o `git add` (2026-10-13).
 bash "$SOURCE_ROOT/.claude/utils/adopt/regen-ssot-projections.sh" "$DEST" \
   || { echo "ABORTADO: as projeções SSOT do alvo não foram geradas — ele nasceria com HARD das REGRAS 8/21"; exit 1; }
 
+# (8b) SEMENTE DO KG no layout ANTIGO (2 documentos YAML, até 2026-10-06) → documento único, provada antes de gravar; grafo do adotante e semente editada só AVISAM, intactos (porquê: no helper). rc≠0 não aborta: mostre ao maestro.
+bash "$SOURCE_ROOT/.claude/utils/adopt/migrate-seed-graph.sh" "$DEST" --source "$SOURCE_ROOT" || echo "⚠️  migrate-seed-graph rc=$? (3 = aviso, 2 = NÃO MEDIDO) — a semente antiga, se houver, segue reprovada pelo contrato." >&2
 # (8c) SEMENTE DO KG — movida para DEPOIS do carimbo (Fase 5): o seed lê mode/role/source_commit do stamp; rodando antes, os três saíam "(não carimbado)" (medido 2026-09-02, num adotante greenfield).
 
 # (9) BASELINES de catraca — REGENERA **TODOS** do corpus do alvo (mesmo padrão do passo 8, mesma razão).
@@ -480,8 +481,8 @@ if [ -z "$IN_PLACE" ] && [ ! -d "$TARGET/.git" ]; then git -C "$TARGET" init -q;
 #     principal). Carimbar `develop` por default seria errado num greenfield sem branch develop (o campo
 #     presente vence a cadeia → base apontaria p/ branch inexistente). Só vira SSOT versionado (Fase 5)
 #     quando é escolha explícita; o git config local é setado no Procedimento pós-cópia (conveniência).
-# 0f. PAPEL (--role adopted|hub|standalone): CORTA o transporte (Fase 2) e entra no carimbo (Fase 5).
-#     Até 2026-10-09 era parseado e nunca lido (`--role standalone` saía `adopted`). Inválido aborta AQUI.
+# 0f. PAPEL (--role adopted|hub|standalone): CORTA o transporte (Fase 2) e entra no carimbo (Fase 5); até 2026-10-09 era ignorado.
+#     `role: standalone` sem `kind: door` é ADOTADO: desde 2026-10-13 o modo porta do lint e da REGRA 92 (Papel da porta no registro concorda com o CARIMBO dela) é o `kind:`. Inválido aborta AQUI.
 ROLE="${ROLE:-adopted}"   # ROLE = o valor de --role (o orquestrador o substitui); omitido → adopted
 case "$ROLE" in adopted|hub|standalone) : ;; *) echo "Abortar: --role '$ROLE' inválido (adopted|hub|standalone)."; exit 1 ;; esac
 ```
@@ -715,7 +716,6 @@ fi
 # DELTA do framework desde a adoção (manifesto filtrado, como no Procedimento):
 # A lista é a MESMA do transporte, e vem da SSOT (vendor-manifest.sh) — só o delta olha `.env.example`,
 # que no transporte é never-clobber e por isso não entra no manifesto.
-#
 # ⚠️ O PAPEL VEM DO STAMP DO ALVO (antes de 2026-09-15 esta linha NÃO O PASSAVA): com o `--role` cortando, um
 # `--update` cego republicaria a meta-fábrica num alvo standalone, desfazendo o corte pela porta dos fundos.
 # O papel é do ALVO (`onion-version.sh` hardcoda `role: source`, a identidade da FONTE — não serve aqui).
@@ -744,7 +744,7 @@ git -C "$SOURCE_ROOT" ls-tree HEAD -- .env.example | grep -q . && manifest+=(.en
   WORK="$(bash "$SOURCE_ROOT/.claude/utils/adopt/dedicated-branch.sh" "$TARGET" "$UPDATE_BR" "$INTEGRATION_BRANCH")" || exit 1
   # WORK = "$TARGET" (sem farol) ou a worktree irmã (com farol). Daqui em diante, TODO passo usa "$WORK".
   ```
-- **Aplicar o framework via MERGE de vendor-branch** (Achado #2 — substitui o copy-over), **na branch dedicada**:
+- **Aplicar o framework via MERGE de vendor-branch** (Achado #2 — substitui o copy-over), **na branch dedicada** (antes, a foto para o diff de hooks do relatório: `cp "$WORK/.claude/settings.json" "$SOURCE_ROOT/.claude/sessions/adopt-<slug>/settings-before.json"`):
   `bash "$SOURCE_ROOT/.claude/utils/adopt/vendor-branch.sh" update "$WORK" "$SOURCE_ROOT" "$NOW" "$UPDATE_BR"`.
   (o 4º argumento é a branch onde o merge cai). O helper aplica o framework novo no
   `onion/vendor` (fonte-de-merge, base comum) e faz `git merge` na branch dedicada → a customização local vira
@@ -759,7 +759,7 @@ git -C "$SOURCE_ROOT" ls-tree HEAD -- .env.example | grep -q . && manifest+=(.en
   starter `docs/evolution/`. (Fecha `docs/evolution/inbox/2026-06-18-adopt-update-skips-phase3-steps.md`.)
   **O `regen-baselines` filtra em vez de re-emitir aqui, e decide sozinho** (`--auto`): no update o alvo já
   tem história, e re-emitir re-toleraria a dívida acumulada; `--filter` tira só a chave **estrangeira**
-  (passivo do core) e a dívida **local** segue cobrada (o defeito de 47 HARD medido em 2026-08-17).
+  (passivo do core) e o resto segue cobrado (o defeito de 47 HARD medido em 2026-08-17). A semente do KG antiga migra no passo (8b). **O rótulo da chave que fica vem do helper** (`{origem: K do core · L do adotante}`): chave de arquivo vendorizado idêntico ao do core no pin é passivo do CORE (ex.: `ops-citation-travel-baseline`, REGRA 100 (Superfície que viaja não cita ops/ como se o destinatário o tivesse)), nunca "dívida local".
 - **Re-carimbar** com a identidade NOVA da fonte (re-derivar — não há PASSO 0 aqui). **Sempre via
   helper determinístico** — a semântica (preserve + updated_at) vive no script, não em quem o chama:
   ```bash
@@ -773,7 +773,7 @@ git -C "$SOURCE_ROOT" ls-tree HEAD -- .env.example | grep -q . && manifest+=(.en
   ```
 - **Auto-emitir o relatório NO ALVO — ANTES do commit durável, que o leva na branch dedicada** via o [📨 Procedimento de Relatório Downstream](#-procedimento-de-relatório-downstream-auto-emitido-no-alvo)
   (`DEST="$WORK"`, `OP=update`, `PIN=$NOW`, `PREV=$ADOPTED_COMMIT`, `BR=$UPDATE_BR`). Reusa o `diff --stat` já computado
-  acima. **O número de HARD do relatório é MEDIDO, nunca lembrado:** antes de escrevê-lo, rode
+  acima. **O diff de hooks é a saída de** `bash "$SOURCE_ROOT/.claude/utils/adopt/merge-onion-hooks.sh" --diff "$SOURCE_ROOT/.claude/sessions/adopt-<slug>/settings-before.json" "$WORK/.claude/settings.json"` (entrada inteira; rc≠0 = NÃO MEDIDO). **O número de HARD do relatório é MEDIDO, nunca lembrado:** antes de escrevê-lo, rode
   `bash "$SOURCE_ROOT/.claude/utils/adopt/remeasure-hard.sh" "$WORK"` (o merge muda o que o lint vê; rc=3 = escreva NÃO MEDIDO).
 - **Commit durável dos passos pós-merge (config + re-stamp):** o framework já veio pelo **merge** (acima,
   já commitado na branch dedicada); resta commitar o que o merge NÃO cobre — o `settings.json` merjado e o
